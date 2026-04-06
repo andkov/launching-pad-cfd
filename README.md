@@ -15,3 +15,7 @@ Study examples to inform your development:
 - [quick-start-template](https://github.com/gotalta/quick-start-template/) — generic starting template, start here for project launches
 - [caseload-forecast-demo](https://github.com/andkov/caseload-forecast-demo) — example of a complete forecasting pipeline using Income Support caseload data
 - [aim-2025-sandbox](https://github.com/andkov/aim-2025-sandbox/) — example of an exploratory data science project using the Book Chamber of Ukraine data, created to accompany AIM academy training
+
+## Possible Research Question
+
+- What is the historic trend of Income Support caseload? How does breaking it down by BFE and ETW change the story? 
