@@ -16,6 +16,7 @@ Study examples to inform your development:
 - [caseload-forecast-demo](https://github.com/andkov/caseload-forecast-demo) — example of a complete forecasting pipeline using Income Support caseload data
 - [aim-2025-sandbox](https://github.com/andkov/aim-2025-sandbox/) — example of an exploratory data science project using the Book Chamber of Ukraine data, created to accompany AIM academy training
 
-## Possible Research Question
+## Sample Initial Prompt
 
-- What is the historic trend of Income Support caseload? How does breaking it down by BFE and ETW change the story? 
+> I'd like to explore the data table  is-aggregated-data-april-2005-sep-2025.csv described by INPUT-manifest.md and aswer the following questions: 1) What is the trend of the total caseload of income support? 2) what do this trend look like when we break it by BFE and ETW components?
+ 
