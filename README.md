@@ -18,5 +18,5 @@ Study examples to inform your development:
 
 ## Sample Initial Prompt
 
-> I'd like to explore the data table  is-aggregated-data-april-2005-sep-2025.csv described by INPUT-manifest.md and aswer the following questions: 1) What is the trend of the total caseload of income support? 2) what is the role of ETW and BFE components in understaning this trend? 
+> I'd like to explore the data table  is-aggregated-data-april-2005-sep-2025.csv described by INPUT-manifest.md and aswer the following questions: 1) What is the trend of the total caseload of income support? 2) what is the role of ETW and BFE components in understanding this trend? 
  
