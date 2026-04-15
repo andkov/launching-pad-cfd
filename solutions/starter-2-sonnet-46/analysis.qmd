@@ -1,0 +1,622 @@
+---
+title: "Alberta Income Support: Historic Caseload Trends"
+subtitle: "Answering two research questions from 20 years of monthly ALSS data"
+author: "Literate analysis — GitHub Copilot (Claude Sonnet 4.6)"
+date: "April 2026"
+format:
+  html:
+    embed-resources: true
+    toc: true
+    toc-depth: 3
+    toc-title: "Contents"
+    code-fold: true
+    code-tools: true
+    code-summary: "Show code"
+    theme: cosmo
+    fig-width: 10
+    fig-height: 5
+    df-print: paged
+    highlight-style: github
+execute:
+  warning: false
+  message: false
+---
+
+```{r}
+#| label: setup
+#| include: false
+
+# Core tidyverse packages used throughout this analysis
+library(readr)      # CSV ingestion
+library(dplyr)      # Data manipulation
+library(tidyr)      # Reshaping (pivot_wider / pivot_longer)
+library(lubridate)  # Date parsing
+library(scales)     # Number formatting for axes
+library(plotly)     # Interactive HTML charts
+```
+
+## Research Questions
+
+This document is a reproducible, literate analysis of the Alberta Income Support
+caseload dataset. It directly addresses two questions:
+
+1. **What is the historic trend of Income Support caseload?**
+2. **How does breaking it down by BFE and ETW change the story?**
+
+---
+
+## Data Source
+
+| Field | Value |
+|:------|:------|
+| **Publisher** | Alberta Assisted Living and Social Services (ALSS), Government of Alberta |
+| **Dataset** | Income Support Caseload |
+| **Coverage** | April 2005 – September 2025 (246 calendar months) |
+| **Licence** | [Open Government Licence – Alberta](https://open.alberta.ca/licence) |
+| **Portal** | [open.alberta.ca](https://open.alberta.ca/opendata/income-support-aggregated-caseload-data) |
+
+The raw CSV uses a **two-row header** — row 1 is a merged title cell, row 2 is
+the actual column header. All data rows report a single
+`(month × measure type × measure)` combination (long format).
+
+---
+
+## Ingestion and Parsing
+
+### Reading the raw file
+
+We skip the two-header rows and assign column names manually. Nine trailing
+empty columns are present in every row; they are dropped immediately.
+
+```{r}
+#| label: ingest
+
+DATA_PATH <- "../../is-aggregated-data-april-2005-sep-2025.csv"
+
+raw <- read_csv(
+  DATA_PATH,
+  col_names = c(
+    "ref_date", "geography", "measure_type", "measure", "value",
+    paste0("drop_", 1:9)   # nine trailing empty columns
+  ),
+  skip           = 2,      # skip title row + header row
+  show_col_types = FALSE
+)
+
+# Drop the empty trailing columns and any rows where value is blank
+raw <- raw |>
+  select(ref_date, geography, measure_type, measure, value) |>
+  filter(!is.na(value), trimws(value) != "")
+```
+
+### Parsing dates
+
+Dates are encoded as `YY-Mon` (e.g., `05-Apr`, `20-Jan`). Two-digit years with
+value ≤ 25 are assumed to be 2000s; all others would be 1900s. We parse to a
+first-of-month `Date` for clean time-series handling.
+
+```{r}
+#| label: parse-dates
+
+parse_ref_date <- function(x) {
+  x     <- trimws(x)
+  parts <- strsplit(x, "-")
+  yr    <- as.integer(vapply(parts, `[[`, character(1), 1))
+  mon   <- vapply(parts, `[[`, character(1), 2)
+
+  full_year <- ifelse(yr <= 25L, 2000L + yr, 1900L + yr)
+
+  as.Date(
+    paste(full_year, mon, "01"),
+    format = "%Y %b %d"
+  )
+}
+
+raw <- raw |>
+  mutate(
+    date  = parse_ref_date(ref_date),
+    value = as.numeric(gsub("[^0-9.]", "", value))
+  )
+
+cat(
+  sprintf("Rows after cleaning: %d\n", nrow(raw)),
+  sprintf("Date range: %s → %s\n",
+          format(min(raw$date), "%b %Y"),
+          format(max(raw$date), "%b %Y")),
+  sprintf("Distinct measure types: %s\n",
+          paste(unique(raw$measure_type), collapse = ", "))
+)
+```
+
+### Available measure types and their coverage
+
+Understanding the temporal extent of each measure type is essential: the
+`Total Caseload` series covers 2005–2012, while the richer `Client Type Level`
+breakdown (BFE/ETW) only begins in April 2012.
+
+```{r}
+#| label: coverage-table
+
+raw |>
+  group_by(measure_type) |>
+  summarise(
+    months       = n_distinct(date),
+    first_month  = format(min(date), "%b %Y"),
+    last_month   = format(max(date), "%b %Y"),
+    .groups = "drop"
+  ) |>
+  arrange(first_month) |>
+  rename(
+    "Measure Type"  = measure_type,
+    "Unique Months" = months,
+    "First Month"   = first_month,
+    "Last Month"    = last_month
+  )
+```
+
+> **Key finding:** The BFE/ETW client-type breakdown is only available from
+> **April 2012** onward. The 2008–2011 recession surge therefore cannot be
+> attributed directly to either client type.
+
+---
+
+## RQ 1 — What is the Historic Trend of Income Support Caseload?
+
+### Building the full series (2005–2025)
+
+Two overlapping series together span the full period:
+
+- **`Total Caseload`** (Apr 2005 – Mar 2012): a single province-wide monthly figure.
+- **`Client Caseload Total`** within `Client Type Level` (Apr 2012 – Sep 2025):
+  the same concept, reported alongside the BFE/ETW breakdown.
+
+We concatenate them into one continuous series. Where both exist for the same
+month (there is no overlap here — the `Total Caseload` series ends exactly where
+`Client Type Level` begins), the latter takes precedence.
+
+```{r}
+#| label: build-total-series
+
+total_series <- bind_rows(
+  raw |>
+    filter(measure_type == "Total Caseload") |>
+    select(date, value),
+
+  raw |>
+    filter(
+      measure_type == "Client Type Level",
+      measure      == "Client Caseload Total"
+    ) |>
+    select(date, value)
+) |>
+  distinct(date, .keep_all = TRUE) |>
+  arrange(date)
+
+cat(sprintf(
+  "Combined series: %d months (%s → %s)\n",
+  nrow(total_series),
+  format(min(total_series$date), "%b %Y"),
+  format(max(total_series$date), "%b %Y")
+))
+```
+
+### Key statistics
+
+```{r}
+#| label: stats-total
+
+stats <- total_series |>
+  summarise(
+    min_value  = min(value),
+    min_date   = date[which.min(value)],
+    max_value  = max(value),
+    max_date   = date[which.max(value)],
+    first_val  = first(value),
+    last_val   = last(value),
+    pct_change = round((last(value) - first(value)) / first(value) * 100, 1)
+  )
+
+cat(
+  sprintf("All-time minimum : %s  (%s)\n",
+          comma(stats$min_value), format(stats$min_date, "%b %Y")),
+  sprintf("All-time maximum : %s  (%s)\n",
+          comma(stats$max_value), format(stats$max_date, "%b %Y")),
+  sprintf("Series start     : %s  (Apr 2005)\n", comma(stats$first_val)),
+  sprintf("Series end       : %s  (Sep 2025)\n", comma(stats$last_val)),
+  sprintf("Net change       : %+.1f%%  over 20 years\n", stats$pct_change)
+)
+```
+
+### Chart 1 — Full monthly caseload, 2005–2025
+
+Shaded regions mark the three macro-economic disruptions that produced the
+largest movements in the series.
+
+```{r}
+#| label: chart-total
+#| fig-cap: "Monthly total Income Support caseload, April 2005 – September 2025. Shaded bands show key economic disruption periods."
+
+# Annotation bands: start, end, label, fill colour
+bands <- tibble(
+  xstart = as.Date(c("2008-10-01", "2015-01-01", "2020-04-01")),
+  xend   = as.Date(c("2011-12-01", "2016-12-01", "2021-08-01")),
+  label  = c("GFC", "Oil price\ncollapse", "COVID /\nCERB"),
+  fill   = c("rgba(255,152,0,0.15)", "rgba(255,152,0,0.15)", "rgba(33,150,243,0.12)")
+)
+
+p1 <- plot_ly() |>
+  # Shaded annotation bands
+  add_ribbons(
+    data       = total_series,
+    x          = ~date,
+    ymin       = 0,
+    ymax       = max(total_series$value) * 1.05,
+    color      = I("rgba(255,152,0,0.12)"),
+    showlegend = FALSE,
+    hoverinfo  = "none",
+    name       = "GFC"
+  )
+
+# Manually add each band as a shape (plotly layout shapes)
+shapes <- lapply(seq_len(nrow(bands)), function(i) {
+  list(
+    type      = "rect",
+    xref      = "x", yref   = "paper",
+    x0        = bands$xstart[i], x1 = bands$xend[i],
+    y0        = 0, y1 = 1,
+    fillcolor = bands$fill[i],
+    line      = list(width = 0),
+    layer     = "below"
+  )
+})
+
+annotations <- lapply(seq_len(nrow(bands)), function(i) {
+  list(
+    x          = bands$xstart[i] + as.numeric(bands$xend[i] - bands$xstart[i]) / 2,
+    y          = 0.97,
+    xref       = "x", yref  = "paper",
+    text       = bands$label[i],
+    showarrow  = FALSE,
+    font       = list(size = 10, color = "rgba(80,80,80,0.8)"),
+    align      = "center"
+  )
+})
+
+p1 <- plot_ly(total_series, x = ~date, y = ~value, type = "scatter",
+              mode = "lines",
+              line = list(color = "#1a6eb5", width = 2),
+              fill = "tozeroy", fillcolor = "rgba(26,110,181,0.08)",
+              name = "Total Caseload",
+              hovertemplate = "<b>%{x|%b %Y}</b><br>Caseload: %{y:,.0f}<extra></extra>") |>
+  layout(
+    title       = list(text = "Alberta Income Support — Total Caseload", font = list(size = 15)),
+    xaxis       = list(title = "", showgrid = TRUE, gridcolor = "rgba(0,0,0,0.06)"),
+    yaxis       = list(title = "Caseload (clients)", tickformat = ",.0f",
+                      showgrid = TRUE, gridcolor = "rgba(0,0,0,0.06)"),
+    shapes      = shapes,
+    annotations = annotations,
+    legend      = list(orientation = "h"),
+    hovermode   = "x unified",
+    plot_bgcolor  = "white",
+    paper_bgcolor = "white"
+  )
+
+p1
+```
+
+### Narrative: five phases of the trend
+
+| Phase | Period | Direction | Driver |
+|:------|:-------|:----------|:-------|
+| 1 — Boom | Apr 2005 – Sep 2008 | ↓ Falling | Alberta oil boom: tight labour market drew potential clients into employment |
+| 2 — GFC surge | Oct 2008 – Jun 2010 | ↑ +48% | Global Financial Crisis; local recession; rapid case intake |
+| 3 — Partial recovery | 2011 – 2014 | → Plateau | Recovery stalled; caseload stabilised in low-to-mid 30,000s |
+| 4 — Oil crash & climb | Jan 2015 – Jan 2020 | ↑ +76% | Oil price collapse; caseload nearly doubled to all-time record of **62,021** |
+| 5 — COVID drop | Apr 2020 – Aug 2021 | ↓ −34% | Federal CERB/CRB replaced provincial IS for many able-bodied clients |
+| 6 — Post-pandemic surge | Sep 2021 – Sep 2025 | ↑ +49% | Federal supports wound down; caseload rebounding rapidly toward prior record |
+
+As of September 2025, the caseload stands at **61,061** — 98% of the January 2020 all-time record and rising.
+
+---
+
+## RQ 2 — How Does the BFE / ETW Breakdown Change the Story?
+
+### Client type definitions
+
+- **BFE (Barriers to Full Employment):** Clients with significant, often long-term barriers — chronic health conditions (>6 months), complex caregiving situations, or other circumstances that preclude full-time employment. Generally receive higher benefit levels.
+- **ETW (Expected to Work):** Clients assessed as able to participate in employment. Subdivided into three subcategories: currently *Working* (low-earnings supplement), *Available for work but not working*, and *Temporarily unavailable*.
+
+### Building the client-type series
+
+```{r}
+#| label: build-split-series
+
+client_type_measures <- c(
+  "BFE - Total",
+  "ETW - Working Total",
+  "ETW - Not Working (Available for Work) Total",
+  "ETW - Not Working (Unavailable for Work) Total",
+  "Client Caseload Total"
+)
+
+split_series <- raw |>
+  filter(
+    measure_type == "Client Type Level",
+    measure      %in% client_type_measures
+  ) |>
+  select(date, measure, value) |>
+  # Tidy the measure names for use as column names / labels
+  mutate(
+    measure_label = case_match(
+      measure,
+      "BFE - Total"                                       ~ "bfe",
+      "ETW - Working Total"                               ~ "etw_working",
+      "ETW - Not Working (Available for Work) Total"      ~ "etw_avail",
+      "ETW - Not Working (Unavailable for Work) Total"    ~ "etw_unavail",
+      "Client Caseload Total"                             ~ "total"
+    )
+  ) |>
+  select(-measure) |>
+  pivot_wider(names_from = measure_label, values_from = value) |>
+  arrange(date) |>
+  mutate(
+    etw_total = etw_working + etw_avail + etw_unavail,
+    bfe_share = round(bfe / total * 100, 1),
+    etw_share = round(etw_total / total * 100, 1)
+  )
+
+cat(sprintf(
+  "Split series: %d months (%s → %s)\n",
+  nrow(split_series),
+  format(min(split_series$date), "%b %Y"),
+  format(max(split_series$date), "%b %Y")
+))
+```
+
+### Annual summary: BFE vs. ETW
+
+```{r}
+#| label: annual-split-table
+
+split_series |>
+  mutate(year = year(date)) |>
+  group_by(year) |>
+  summarise(
+    across(c(total, bfe, etw_total, etw_avail, etw_unavail, etw_working, bfe_share),
+           ~ round(mean(.x))),
+    .groups = "drop"
+  ) |>
+  rename(
+    "Year"              = year,
+    "Total"             = total,
+    "BFE"               = bfe,
+    "ETW Total"         = etw_total,
+    "ETW Avail."        = etw_avail,
+    "ETW Unavail."      = etw_unavail,
+    "ETW Working"       = etw_working,
+    "BFE Share (%)"     = bfe_share
+  )
+```
+
+### Chart 2 — BFE vs. total ETW over time
+
+The plot below immediately reveals the fundamental divergence: BFE is stable;
+ETW is volatile and growing.
+
+```{r}
+#| label: chart-bfe-etw
+#| fig-cap: "Monthly BFE and ETW caseload, April 2012 – September 2025. BFE is stable; ETW drives every major swing."
+
+shapes_split <- lapply(list(
+  list(x0 = "2015-01-01", x1 = "2016-12-01", fill = "rgba(255,152,0,0.12)", lbl = "Oil crash"),
+  list(x0 = "2020-04-01", x1 = "2021-08-01", fill = "rgba(33,150,243,0.10)", lbl = "COVID/CERB")
+), function(b) {
+  list(type="rect", xref="x", yref="paper",
+       x0=as.Date(b$x0), x1=as.Date(b$x1),
+       y0=0, y1=1, fillcolor=b$fill, line=list(width=0), layer="below")
+})
+
+ann_split <- lapply(list(
+  list(x0="2015-01-01", x1="2016-12-01", lbl="Oil crash"),
+  list(x0="2020-04-01", x1="2021-08-01", lbl="COVID/CERB")
+), function(b) {
+  xs <- as.Date(b$x0); xe <- as.Date(b$x1)
+  list(x=xs + as.numeric(xe-xs)/2, y=0.97, xref="x", yref="paper",
+       text=b$lbl, showarrow=FALSE,
+       font=list(size=10, color="rgba(80,80,80,0.8)"))
+})
+
+plot_ly(split_series) |>
+  add_trace(x = ~date, y = ~bfe,
+            type = "scatter", mode = "lines",
+            name = "BFE – Total",
+            line = list(color = "#c0392b", width = 2.5),
+            fill = "tozeroy", fillcolor = "rgba(192,57,43,0.08)",
+            hovertemplate = "<b>%{x|%b %Y}</b><br>BFE: %{y:,.0f}<extra></extra>") |>
+  add_trace(x = ~date, y = ~etw_total,
+            type = "scatter", mode = "lines",
+            name = "ETW – Total",
+            line = list(color = "#2980b9", width = 2.5),
+            fill = "tozeroy", fillcolor = "rgba(41,128,185,0.08)",
+            hovertemplate = "<b>%{x|%b %Y}</b><br>ETW: %{y:,.0f}<extra></extra>") |>
+  layout(
+    title       = list(text = "BFE vs. ETW — Monthly Caseload (Apr 2012 – Sep 2025)",
+                       font = list(size = 15)),
+    xaxis       = list(title = "", gridcolor = "rgba(0,0,0,0.06)"),
+    yaxis       = list(title = "Clients", tickformat = ",.0f",
+                       gridcolor = "rgba(0,0,0,0.06)"),
+    shapes      = shapes_split,
+    annotations = ann_split,
+    legend      = list(orientation = "h", y = -0.12),
+    hovermode   = "x unified",
+    plot_bgcolor  = "white",
+    paper_bgcolor = "white"
+  )
+```
+
+### Chart 3 — BFE share of total caseload (%)
+
+A declining share confirms the caseload is becoming increasingly ETW-dominant
+over the observation period.
+
+```{r}
+#| label: chart-bfe-share
+#| fig-height: 3.5
+#| fig-cap: "BFE share of total caseload, monthly. Falling from ~50% in 2012 to ~31% in September 2025."
+
+plot_ly(split_series, x = ~date, y = ~bfe_share,
+        type = "scatter", mode = "lines",
+        line = list(color = "#c0392b", width = 2),
+        fill = "tozeroy", fillcolor = "rgba(192,57,43,0.08)",
+        name = "BFE share (%)",
+        hovertemplate = "<b>%{x|%b %Y}</b><br>BFE share: %{y:.1f}%<extra></extra>") |>
+  layout(
+    title  = list(text = "BFE Share of Total Caseload (%)", font = list(size = 15)),
+    xaxis  = list(title = "", gridcolor = "rgba(0,0,0,0.06)"),
+    yaxis  = list(title = "BFE share (%)", range = c(25, 60),
+                  ticksuffix = "%", gridcolor = "rgba(0,0,0,0.06)"),
+    shapes = c(
+      shapes_split,
+      list(list(type="line", xref="paper", yref="y",
+                x0=0, x1=1, y0=50, y1=50,
+                line=list(color="rgba(108,117,125,0.5)", width=1,
+                          dash="dash")))
+    ),
+    hovermode     = "x unified",
+    plot_bgcolor  = "white",
+    paper_bgcolor = "white"
+  )
+```
+
+### Chart 4 — ETW subcategory breakdown
+
+Within ETW, three subcategories tell quite different stories. This chart lets
+you compare them in stacked or individual form.
+
+```{r}
+#| label: chart-etw-sub
+#| fig-cap: "ETW subcategories, monthly, April 2012 – September 2025. 'Available for work' is overwhelmingly the largest and fastest-growing group."
+
+plot_ly(split_series) |>
+  add_trace(x = ~date, y = ~etw_avail,
+            type = "scatter", mode = "lines", stackgroup = "etw",
+            name = "Not Working – Available",
+            line = list(color = "#2980b9"),
+            fillcolor = "rgba(41,128,185,0.5)",
+            hovertemplate = "<b>%{x|%b %Y}</b><br>Available: %{y:,.0f}<extra></extra>") |>
+  add_trace(x = ~date, y = ~etw_unavail,
+            type = "scatter", mode = "lines", stackgroup = "etw",
+            name = "Not Working – Unavailable",
+            line = list(color = "#8e44ad"),
+            fillcolor = "rgba(142,68,173,0.5)",
+            hovertemplate = "<b>%{x|%b %Y}</b><br>Unavailable: %{y:,.0f}<extra></extra>") |>
+  add_trace(x = ~date, y = ~etw_working,
+            type = "scatter", mode = "lines", stackgroup = "etw",
+            name = "Working (earnings supplement)",
+            line = list(color = "#27ae60"),
+            fillcolor = "rgba(39,174,96,0.5)",
+            hovertemplate = "<b>%{x|%b %Y}</b><br>Working: %{y:,.0f}<extra></extra>") |>
+  layout(
+    title       = list(text = "ETW Subcategories — Stacked Monthly Caseload",
+                       font = list(size = 15)),
+    xaxis       = list(title = "", gridcolor = "rgba(0,0,0,0.06)"),
+    yaxis       = list(title = "Clients", tickformat = ",.0f",
+                       gridcolor = "rgba(0,0,0,0.06)"),
+    shapes      = shapes_split,
+    annotations = ann_split,
+    legend      = list(orientation = "h", y = -0.15),
+    hovermode   = "x unified",
+    plot_bgcolor  = "white",
+    paper_bgcolor = "white"
+  )
+```
+
+---
+
+## Synthesis: Answering the Research Questions
+
+### RQ 1 — What is the historic trend?
+
+The 20-year record is one of sustained, structural growth punctuated by cyclical
+shocks. Starting from a boom-era low of **24,205** (October 2006), total caseload
+has grown by over 150% to **61,061** (September 2025). The net trajectory is
+unmistakably upward — even after recovering from the COVID dip, the caseload is
+now approaching the all-time record of 62,021 set in January 2020.
+
+Three macro-shocks produced large step-changes: the **Global Financial Crisis**
+(+48%, 2008–2010), the **oil price collapse** (+76%, 2015–2020), and the
+**post-pandemic rebound** (under way since 2021). Notably, the COVID period
+produced a *downward* shock — an anomaly explained by federal emergency income 
+supports (CERB/CRB) temporarily displacing provincial Income Support.
+
+### RQ 2 — How does BFE/ETW change the story?
+
+The single trend line conceals a fundamental division:
+
+```{r}
+#| label: final-stats
+#| echo: false
+
+first_row <- split_series |> filter(date == min(date))
+last_row  <- split_series |> filter(date == max(date))
+bfe_peak  <- split_series |> filter(bfe == max(bfe))
+etw_peak  <- split_series |> filter(etw_total == max(etw_total))
+
+tibble(
+  Segment      = c("BFE", "ETW Total", "ETW – Available for Work"),
+  `Apr 2012`   = c(
+    comma(first_row$bfe),
+    comma(first_row$etw_total),
+    comma(first_row$etw_avail)
+  ),
+  `Sep 2025`   = c(
+    comma(last_row$bfe),
+    comma(last_row$etw_total),
+    comma(last_row$etw_avail)
+  ),
+  `Peak`       = c(
+    paste0(comma(bfe_peak$bfe), " (", format(bfe_peak$date, "%b %Y"), ")"),
+    paste0(comma(etw_peak$etw_total), " (", format(etw_peak$date, "%b %Y"), ")"),
+    "—"
+  ),
+  `Growth (2012–2025)` = c(
+    paste0("+", round((last_row$bfe - first_row$bfe) / first_row$bfe * 100), "%"),
+    paste0("+", round((last_row$etw_total - first_row$etw_total) / first_row$etw_total * 100), "%"),
+    paste0("+", round((last_row$etw_avail - first_row$etw_avail) / first_row$etw_avail * 100), "%")
+  )
+) 
+```
+
+**BFE** represents relatively stable, structural need. Its modest growth
+(~+18% over 13 years) likely reflects demographic trends and policy thresholds
+rather than economic cycles. It is now a *shrinking share* of the caseload —
+down from ~50% in 2012 to ~31% in September 2025.
+
+**ETW** is the sole driver of large-scale caseload variation. Every recession,
+every oil-price downturn, and every pandemic-recovery curve is an ETW story.
+Within ETW, the *Available for Work* subcategory — clients ready to work but
+unable to find it — has grown nearly four-fold (~7,200 to ~27,000), making it
+the single largest contributor to the 20-year upward trend.
+
+**Policy implication:** A caseload that is now 69% ETW is fundamentally a
+**labour market accessibility problem**, not primarily a chronic-need or
+disability story. Caseload responds sharply to economic conditions (booms pull
+it down; recessions push it up), and the post-pandemic trajectory suggests that
+recovery of labour market inclusion has not kept pace with the withdrawal of
+emergency federal income supports.
+
+---
+
+## Appendix: Session Information
+
+```{r}
+#| label: session-info
+#| code-fold: false
+
+cat("R version:", R.version$version.string, "\n")
+cat("Platform :", R.version$platform, "\n\n")
+pkgs <- c("readr","dplyr","tidyr","lubridate","scales","plotly")
+ip   <- as.data.frame(installed.packages()[pkgs, c("Package","Version")])
+rownames(ip) <- NULL
+print(ip)
+```

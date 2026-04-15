@@ -1,0 +1,546 @@
+---
+title: "Alberta Income Support: Historic Caseload Trends"
+subtitle: "Answering two research questions from 20 years of monthly ALSS data"
+author: "Literate analysis — GitHub Copilot (Claude Sonnet 4.6)"
+date: "April 2026"
+format:
+  html:
+    embed-resources: true
+    toc: true
+    toc-depth: 3
+    toc-title: "Contents"
+    code-fold: true
+    code-tools: true
+    code-summary: "Show code"
+    theme: cosmo
+    fig-width: 10
+    fig-height: 5
+    df-print: paged
+    highlight-style: github
+execute:
+  warning: false
+  message: false
+jupyter: python3
+---
+
+```{python}
+#| label: setup
+#| include: false
+
+import pandas as pd
+import numpy as np
+import plotly.graph_objects as go
+import plotly.express as px
+from IPython.display import display
+```
+
+## Research Questions
+
+This document is a reproducible, literate analysis of the Alberta Income Support
+caseload dataset. It directly addresses two questions:
+
+1. **What is the historic trend of Income Support caseload?**
+2. **How does breaking it down by BFE and ETW change the story?**
+
+---
+
+## Data Source
+
+| Field | Value |
+|:------|:------|
+| **Publisher** | Alberta Assisted Living and Social Services (ALSS), Government of Alberta |
+| **Dataset** | Income Support Caseload |
+| **Coverage** | April 2005 – September 2025 (246 calendar months) |
+| **Licence** | [Open Government Licence – Alberta](https://open.alberta.ca/licence) |
+| **Portal** | [open.alberta.ca](https://open.alberta.ca/opendata/income-support-aggregated-caseload-data) |
+
+The raw CSV uses a **two-row header** — row 1 is a merged title cell, row 2 is
+the actual column header. All data rows report a single
+`(month × measure type × measure)` combination (long format).
+
+---
+
+## Ingestion and Parsing
+
+### Reading the raw file
+
+We skip the two header rows and assign column names manually. Nine trailing
+empty columns are present in every row; they are dropped immediately.
+
+```{python}
+#| label: ingest
+
+DATA_PATH = "../../is-aggregated-data-april-2005-sep-2025.csv"
+
+COL_NAMES = ["ref_date", "geography", "measure_type", "measure", "value"] + \
+            [f"drop_{i}" for i in range(1, 10)]
+
+raw = pd.read_csv(
+    DATA_PATH,
+    header=None,
+    names=COL_NAMES,
+    skiprows=2,          # skip title row + column-header row
+    encoding="utf-8"
+)
+
+# Keep only the five meaningful columns; drop trailing empties
+raw = raw[["ref_date", "geography", "measure_type", "measure", "value"]].copy()
+
+# Remove rows with blank value cells
+raw = raw[raw["value"].notna() & (raw["value"].str.strip() != "")]
+```
+
+### Parsing dates
+
+Dates are encoded as `YY-Mon` (e.g., `05-Apr`, `20-Jan`). Two-digit years with
+value ≤ 25 are assumed to be 2000s; all others would be 1900s. We parse to a
+first-of-month `datetime` for clean time-series handling.
+
+```{python}
+#| label: parse-dates
+
+def parse_ref_date(s: str) -> pd.Timestamp:
+    """Convert 'YY-Mon' strings to first-of-month Timestamps."""
+    yr_str, mon = s.strip().split("-")
+    yr = int(yr_str)
+    full_year = 2000 + yr if yr <= 25 else 1900 + yr
+    return pd.Timestamp(f"{full_year}-{mon}-01")
+
+raw["date"]  = raw["ref_date"].apply(parse_ref_date)
+raw["value"] = pd.to_numeric(raw["value"].str.replace(r"[^0-9.]", "", regex=True))
+
+print(f"Rows after cleaning : {len(raw):,}")
+print(f"Date range          : {raw['date'].min().strftime('%b %Y')} → {raw['date'].max().strftime('%b %Y')}")
+print(f"Distinct measure types: {', '.join(sorted(raw['measure_type'].unique()))}")
+```
+
+### Available measure types and their temporal coverage
+
+Understanding the extent of each measure type is essential. The `Total Caseload`
+series covers 2005–2012, while the richer `Client Type Level` breakdown
+(BFE/ETW) only begins in April 2012.
+
+```{python}
+#| label: coverage-table
+
+coverage = (
+    raw.groupby("measure_type")["date"]
+    .agg(months="nunique", first_month="min", last_month="max")
+    .reset_index()
+    .sort_values("first_month")
+)
+coverage["first_month"] = coverage["first_month"].dt.strftime("%b %Y")
+coverage["last_month"]  = coverage["last_month"].dt.strftime("%b %Y")
+coverage.columns        = ["Measure Type", "Unique Months", "First Month", "Last Month"]
+display(coverage.reset_index(drop=True))
+```
+
+> **Key finding:** The BFE/ETW client-type breakdown is only available from
+> **April 2012** onward. The 2008–2011 recession surge therefore cannot be
+> attributed directly to either client type.
+
+---
+
+## RQ 1 — What is the Historic Trend of Income Support Caseload?
+
+### Building the full series (2005–2025)
+
+Two overlapping series together span the full period:
+
+- **`Total Caseload`** (Apr 2005 – Mar 2012): a single province-wide monthly figure.
+- **`Client Caseload Total`** within `Client Type Level` (Apr 2012 – Sep 2025):
+  the same concept, reported alongside the BFE/ETW breakdown.
+
+We concatenate them into one continuous series. There is no overlap — the
+`Total Caseload` series ends exactly where `Client Type Level` begins.
+
+```{python}
+#| label: build-total-series
+
+total_series = pd.concat([
+    raw.loc[raw["measure_type"] == "Total Caseload", ["date", "value"]],
+    raw.loc[
+        (raw["measure_type"] == "Client Type Level") &
+        (raw["measure"] == "Client Caseload Total"),
+        ["date", "value"]
+    ],
+])
+total_series = (
+    total_series
+    .drop_duplicates(subset="date")
+    .sort_values("date")
+    .reset_index(drop=True)
+)
+
+print(
+    f"Combined series : {len(total_series):,} months  "
+    f"({total_series['date'].iloc[0].strftime('%b %Y')} → "
+    f"{total_series['date'].iloc[-1].strftime('%b %Y')})"
+)
+```
+
+### Key statistics
+
+```{python}
+#| label: stats-total
+
+idx_min = total_series["value"].idxmin()
+idx_max = total_series["value"].idxmax()
+
+print(f"All-time minimum : {total_series.loc[idx_min, 'value']:,.0f}  "
+      f"({total_series.loc[idx_min, 'date'].strftime('%b %Y')})")
+print(f"All-time maximum : {total_series.loc[idx_max, 'value']:,.0f}  "
+      f"({total_series.loc[idx_max, 'date'].strftime('%b %Y')})")
+print(f"Series start     : {total_series['value'].iloc[0]:,.0f}  (Apr 2005)")
+print(f"Series end       : {total_series['value'].iloc[-1]:,.0f}  (Sep 2025)")
+pct = (total_series['value'].iloc[-1] - total_series['value'].iloc[0]) / total_series['value'].iloc[0] * 100
+print(f"Net change       : {pct:+.1f}%  over 20 years")
+```
+
+### Chart 1 — Full monthly caseload, 2005–2025
+
+Shaded regions mark the three macro-economic disruptions that produced the
+largest movements in the series.
+
+```{python}
+#| label: chart-total
+#| fig-cap: "Monthly total Income Support caseload, April 2005 – September 2025. Shaded bands show key economic disruption periods."
+
+# Economic disruption bands: (start, end, label, fillcolor)
+bands = [
+    ("2008-10-01", "2011-12-01", "GFC",            "rgba(255,152,0,0.13)"),
+    ("2015-01-01", "2016-12-01", "Oil price\ncollapse", "rgba(255,152,0,0.13)"),
+    ("2020-04-01", "2021-08-01", "COVID /\nCERB",   "rgba(33,150,243,0.11)"),
+]
+
+shapes = []
+annotations = []
+for x0, x1, label, fcolor in bands:
+    shapes.append(dict(
+        type="rect", xref="x", yref="paper",
+        x0=x0, x1=x1, y0=0, y1=1,
+        fillcolor=fcolor, line=dict(width=0), layer="below"
+    ))
+    # Place label at horizontal midpoint, near top
+    mid = pd.Timestamp(x0) + (pd.Timestamp(x1) - pd.Timestamp(x0)) / 2
+    annotations.append(dict(
+        x=mid, y=0.97, xref="x", yref="paper",
+        text=label, showarrow=False,
+        font=dict(size=10, color="rgba(80,80,80,0.85)"),
+        align="center"
+    ))
+
+fig1 = go.Figure()
+fig1.add_trace(go.Scatter(
+    x=total_series["date"],
+    y=total_series["value"],
+    mode="lines",
+    name="Total Caseload",
+    line=dict(color="#1a6eb5", width=2),
+    fill="tozeroy",
+    fillcolor="rgba(26,110,181,0.08)",
+    hovertemplate="<b>%{x|%b %Y}</b><br>Caseload: %{y:,.0f}<extra></extra>"
+))
+fig1.update_layout(
+    title=dict(text="Alberta Income Support — Total Caseload", font=dict(size=15)),
+    xaxis=dict(title="", showgrid=True, gridcolor="rgba(0,0,0,0.06)"),
+    yaxis=dict(title="Caseload (clients)", tickformat=",.0f",
+               showgrid=True, gridcolor="rgba(0,0,0,0.06)"),
+    shapes=shapes,
+    annotations=annotations,
+    legend=dict(orientation="h"),
+    hovermode="x unified",
+    plot_bgcolor="white",
+    paper_bgcolor="white"
+)
+fig1.show()
+```
+
+### Narrative: five phases of the trend
+
+| Phase | Period | Direction | Driver |
+|:------|:-------|:----------|:-------|
+| 1 — Boom | Apr 2005 – Sep 2008 | ↓ Falling | Alberta oil boom: tight labour market drew potential clients into employment |
+| 2 — GFC surge | Oct 2008 – Jun 2010 | ↑ +48% | Global Financial Crisis; local recession; rapid case intake |
+| 3 — Partial recovery | 2011 – 2014 | → Plateau | Recovery stalled; caseload stabilised in the low-to-mid 30,000s |
+| 4 — Oil crash & climb | Jan 2015 – Jan 2020 | ↑ +76% | Oil price collapse; caseload nearly doubled to all-time record of **62,021** |
+| 5 — COVID drop | Apr 2020 – Aug 2021 | ↓ −34% | Federal CERB/CRB replaced provincial IS for many able-bodied clients |
+| 6 — Post-pandemic surge | Sep 2021 – Sep 2025 | ↑ +49% | Federal supports wound down; caseload rebounding rapidly toward prior record |
+
+As of September 2025, the caseload stands at **61,061** — 98% of the January 2020
+all-time record and rising.
+
+---
+
+## RQ 2 — How Does the BFE / ETW Breakdown Change the Story?
+
+### Client type definitions
+
+- **BFE (Barriers to Full Employment):** Clients with significant, often long-term
+  barriers — chronic health conditions (>6 months), complex caregiving situations,
+  or other circumstances that preclude full-time employment. Generally receive
+  higher benefit levels.
+- **ETW (Expected to Work):** Clients assessed as able to participate in
+  employment. Subdivided into three sub-categories: currently *Working*
+  (low-earnings supplement), *Available for work but not working*, and
+  *Temporarily unavailable*.
+
+### Building the client-type series
+
+```{python}
+#| label: build-split-series
+
+CLIENT_MEASURES = {
+    "BFE - Total":                                           "bfe",
+    "ETW - Working Total":                                   "etw_working",
+    "ETW - Not Working (Available for Work) Total":          "etw_avail",
+    "ETW - Not Working (Unavailable for Work) Total":        "etw_unavail",
+    "Client Caseload Total":                                 "total",
+}
+
+split_long = raw.loc[
+    (raw["measure_type"] == "Client Type Level") &
+    (raw["measure"].isin(CLIENT_MEASURES)),
+    ["date", "measure", "value"]
+].copy()
+
+split_long["measure_label"] = split_long["measure"].map(CLIENT_MEASURES)
+
+split_series = (
+    split_long
+    .pivot_table(index="date", columns="measure_label", values="value", aggfunc="first")
+    .reset_index()
+    .sort_values("date")
+)
+
+split_series["etw_total"] = (
+    split_series["etw_working"] + split_series["etw_avail"] + split_series["etw_unavail"]
+)
+split_series["bfe_share"] = (split_series["bfe"] / split_series["total"] * 100).round(1)
+split_series["etw_share"] = (split_series["etw_total"] / split_series["total"] * 100).round(1)
+
+print(
+    f"Split series : {len(split_series):,} months  "
+    f"({split_series['date'].iloc[0].strftime('%b %Y')} → "
+    f"{split_series['date'].iloc[-1].strftime('%b %Y')})"
+)
+```
+
+### Annual summary: BFE vs. ETW
+
+```{python}
+#| label: annual-split-table
+
+annual = (
+    split_series.assign(year=split_series["date"].dt.year)
+    .groupby("year")[["total", "bfe", "etw_total", "etw_avail",
+                       "etw_unavail", "etw_working", "bfe_share"]]
+    .mean()
+    .round(0)
+    .reset_index()
+)
+annual.columns = ["Year", "Total", "BFE", "ETW Total", "ETW Avail.",
+                  "ETW Unavail.", "ETW Working", "BFE Share (%)"]
+annual = annual.astype({c: "Int64" for c in annual.columns if c not in ("Year", "BFE Share (%)")})
+display(annual)
+```
+
+### Chart 2 — BFE vs. total ETW over time
+
+The plot immediately reveals the fundamental divergence: **BFE is stable;
+ETW is volatile and growing.**
+
+```{python}
+#| label: chart-bfe-etw
+#| fig-cap: "Monthly BFE and ETW caseload, April 2012 – September 2025. BFE is stable; ETW drives every major swing."
+
+split_bands = [
+    ("2015-01-01", "2016-12-01", "Oil crash",  "rgba(255,152,0,0.12)"),
+    ("2020-04-01", "2021-08-01", "COVID/CERB", "rgba(33,150,243,0.10)"),
+]
+
+def make_band_shapes(bands_list):
+    shapes, anns = [], []
+    for x0, x1, label, fcolor in bands_list:
+        shapes.append(dict(
+            type="rect", xref="x", yref="paper",
+            x0=x0, x1=x1, y0=0, y1=1,
+            fillcolor=fcolor, line=dict(width=0), layer="below"
+        ))
+        mid = pd.Timestamp(x0) + (pd.Timestamp(x1) - pd.Timestamp(x0)) / 2
+        anns.append(dict(
+            x=mid, y=0.97, xref="x", yref="paper",
+            text=label, showarrow=False,
+            font=dict(size=10, color="rgba(80,80,80,0.85)"),
+            align="center"
+        ))
+    return shapes, anns
+
+s2, a2 = make_band_shapes(split_bands)
+
+fig2 = go.Figure()
+fig2.add_trace(go.Scatter(
+    x=split_series["date"], y=split_series["bfe"],
+    mode="lines", name="BFE – Total",
+    line=dict(color="#c0392b", width=2.5),
+    fill="tozeroy", fillcolor="rgba(192,57,43,0.08)",
+    hovertemplate="<b>%{x|%b %Y}</b><br>BFE: %{y:,.0f}<extra></extra>"
+))
+fig2.add_trace(go.Scatter(
+    x=split_series["date"], y=split_series["etw_total"],
+    mode="lines", name="ETW – Total",
+    line=dict(color="#2980b9", width=2.5),
+    fill="tozeroy", fillcolor="rgba(41,128,185,0.08)",
+    hovertemplate="<b>%{x|%b %Y}</b><br>ETW: %{y:,.0f}<extra></extra>"
+))
+fig2.update_layout(
+    title=dict(text="BFE vs. ETW — Monthly Caseload (Apr 2012 – Sep 2025)",
+               font=dict(size=15)),
+    xaxis=dict(title="", gridcolor="rgba(0,0,0,0.06)"),
+    yaxis=dict(title="Clients", tickformat=",.0f",
+               gridcolor="rgba(0,0,0,0.06)"),
+    shapes=s2, annotations=a2,
+    legend=dict(orientation="h", y=-0.12),
+    hovermode="x unified",
+    plot_bgcolor="white", paper_bgcolor="white"
+)
+fig2.show()
+```
+
+### Chart 3 — BFE share of total caseload (%)
+
+A declining share confirms the caseload is becoming increasingly ETW-dominant
+over the observation period.
+
+```{python}
+#| label: chart-bfe-share
+#| fig-height: 3.5
+#| fig-cap: "BFE share of total caseload, monthly. Falling from ~50% in 2012 to ~31% in September 2025."
+
+s3, a3 = make_band_shapes(split_bands)
+# Add a horizontal 50% reference line
+s3.append(dict(
+    type="line", xref="paper", yref="y",
+    x0=0, x1=1, y0=50, y1=50,
+    line=dict(color="rgba(108,117,125,0.5)", width=1, dash="dash")
+))
+
+fig3 = go.Figure()
+fig3.add_trace(go.Scatter(
+    x=split_series["date"], y=split_series["bfe_share"],
+    mode="lines", name="BFE share (%)",
+    line=dict(color="#c0392b", width=2),
+    fill="tozeroy", fillcolor="rgba(192,57,43,0.08)",
+    hovertemplate="<b>%{x|%b %Y}</b><br>BFE share: %{y:.1f}%<extra></extra>"
+))
+fig3.update_layout(
+    title=dict(text="BFE Share of Total Caseload (%)", font=dict(size=15)),
+    xaxis=dict(title="", gridcolor="rgba(0,0,0,0.06)"),
+    yaxis=dict(title="BFE share (%)", range=[25, 60],
+               ticksuffix="%", gridcolor="rgba(0,0,0,0.06)"),
+    shapes=s3, annotations=a3,
+    hovermode="x unified",
+    plot_bgcolor="white", paper_bgcolor="white"
+)
+fig3.show()
+```
+
+### Chart 4 — ETW sub-category breakdown
+
+Within ETW, three sub-categories tell quite different stories. *Available for
+work* is overwhelmingly the largest and most volatile group.
+
+```{python}
+#| label: chart-etw-sub
+#| fig-cap: "ETW sub-categories, monthly, April 2012 – September 2025."
+
+s4, a4 = make_band_shapes(split_bands)
+
+fig4 = go.Figure()
+fig4.add_trace(go.Scatter(
+    x=split_series["date"], y=split_series["etw_avail"],
+    mode="lines", name="Available for work",
+    line=dict(color="#2980b9", width=2),
+    stackgroup="etw",
+    hovertemplate="<b>%{x|%b %Y}</b><br>Avail.: %{y:,.0f}<extra></extra>"
+))
+fig4.add_trace(go.Scatter(
+    x=split_series["date"], y=split_series["etw_unavail"],
+    mode="lines", name="Unavailable for work",
+    line=dict(color="#8e44ad", width=2),
+    stackgroup="etw",
+    hovertemplate="<b>%{x|%b %Y}</b><br>Unavail.: %{y:,.0f}<extra></extra>"
+))
+fig4.add_trace(go.Scatter(
+    x=split_series["date"], y=split_series["etw_working"],
+    mode="lines", name="Working",
+    line=dict(color="#27ae60", width=2),
+    stackgroup="etw",
+    hovertemplate="<b>%{x|%b %Y}</b><br>Working: %{y:,.0f}<extra></extra>"
+))
+fig4.update_layout(
+    title=dict(text="ETW Sub-categories — Stacked Monthly Caseload (Apr 2012 – Sep 2025)",
+               font=dict(size=15)),
+    xaxis=dict(title="", gridcolor="rgba(0,0,0,0.06)"),
+    yaxis=dict(title="Clients", tickformat=",.0f",
+               gridcolor="rgba(0,0,0,0.06)"),
+    shapes=s4, annotations=a4,
+    legend=dict(orientation="h", y=-0.14),
+    hovermode="x unified",
+    plot_bgcolor="white", paper_bgcolor="white"
+)
+fig4.show()
+```
+
+---
+
+## Summary and Key Insights
+
+### RQ 1 — Historic Trend
+
+The twenty-year series (2005–2025) is best understood in **six phases** driven
+by Alberta's boom-bust oil economy and federal policy responses:
+
+1. **2005–2008 Boom:** Caseload fell ~20% as a tight labour market kept
+   potential clients employed.
+2. **2008–2010 GFC surge:** A 48% spike driven by the global financial crisis
+   and the resulting Alberta recession.
+3. **2011–2014 Plateau:** Partial recovery; the caseload stabilised in the
+   low 30,000s as the economy normalised.
+4. **2015–2020 Oil collapse:** The single largest sustained increase in the
+   series — from ~35,000 to an all-time record of 62,021 (Jan 2020).
+5. **2020–2021 COVID / CERB drop:** A rapid, federally-driven decline as CERB
+   absorbed the ETW population; not an improvement in underlying need.
+6. **2021–2025 Post-pandemic surge:** Federal income supports wound down;
+   caseload has rapidly returned toward the 2020 record.
+
+### RQ 2 — How Does the BFE/ETW Split Change the Story?
+
+The breakdown fundamentally reframes the narrative:
+
+| Dimension | Without split | With split |
+|:----------|:-------------|:-----------|
+| **Trend driver** | Caseload looks uniformly volatile | All volatility is ETW; BFE is remarkably stable (~18,000–20,000 clients) |
+| **Policy implication** | Generic macroeconomic response | ETW clients are cyclically reactive to labour markets; BFE clients have persistent, structural needs |
+| **COVID drop** | Appears as a genuine reduction | Clearly a measurement artifact — ETW clients shifted to federal CERB; BFE barely moved |
+| **Long-run structure** | Single aggregate trend | BFE share fell from ~50% to ~31% over 13 years, signalling caseload composition is shifting toward ETW |
+
+The sub-category chart adds a further insight: within ETW, the *Available for
+work* group accounts for nearly all the volatility, while *Working* and
+*Unavailable* subcategories are comparatively stable.
+
+---
+
+## Reproducibility
+
+```{python}
+#| label: session-info
+
+import sys, importlib
+
+libs = ["pandas", "numpy", "plotly"]
+print(f"Python  : {sys.version.split()[0]}")
+for lib in libs:
+    mod = importlib.import_module(lib)
+    print(f"{lib:<10}: {mod.__version__}")
+```

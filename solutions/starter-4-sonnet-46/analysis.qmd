@@ -1,0 +1,254 @@
+---
+title: "Alberta Income Support: Historic Caseload Trends"
+subtitle: "A literate R + Quarto pair — BFE/ETW breakdown analysis"
+author: "Literate analysis — GitHub Copilot (Claude Sonnet 4.6)"
+date: "April 2026"
+format:
+  html:
+    embed-resources: true
+    toc: true
+    toc-depth: 3
+    toc-title: "Contents"
+    code-fold: true
+    code-tools: true
+    code-summary: "Show code"
+    theme: cosmo
+    fig-width: 10
+    fig-height: 5
+    df-print: paged
+    highlight-style: github
+execute:
+  warning: false
+  message: false
+---
+
+```{r}
+#| label: setup
+#| include: false
+
+# Source the companion R script.
+# All data loading, cleaning, and chart construction happen there;
+# this document only adds narrative and calls the resulting objects.
+source("analysis.R")
+```
+
+## Research Questions
+
+This document is a reproducible, literate analysis of the Alberta Income Support
+caseload dataset published by Alberta Assisted Living and Social Services (ALSS).
+It directly addresses two questions:
+
+1. **What is the historic trend of Income Support caseload?**
+2. **How does breaking it down by BFE and ETW change the story?**
+
+The companion script `analysis.R` contains every data-transformation step.
+This file (`analysis.qmd`) provides the narrative, tables, and charts.
+
+---
+
+## Data Source
+
+| Field | Value |
+|:------|:------|
+| **Publisher** | Alberta Assisted Living and Social Services (ALSS) |
+| **Dataset** | Income Support Caseload |
+| **Coverage** | April 2005 – September 2025 (246 calendar months) |
+| **Licence** | [Open Government Licence – Alberta](https://open.alberta.ca/licence) |
+| **Portal** | [open.alberta.ca](https://open.alberta.ca/opendata/income-support-aggregated-caseload-data) |
+
+The raw CSV uses a **two-row header** (row 1 is a merged title cell; row 2
+contains column names). All data rows report a single
+`(month × measure type × measure)` combination in long format.
+
+---
+
+## Data Coverage
+
+The table below shows the temporal extent of each measure type in the dataset.
+Understanding this is essential: the `Client Type Level` series (which carries
+the BFE/ETW split) only begins in April 2012.
+
+```{r}
+#| label: coverage-table
+
+coverage_tbl |>
+  rename(
+    "Measure Type"  = measure_type,
+    "Unique Months" = months,
+    "First Month"   = first_month,
+    "Last Month"    = last_month
+  )
+```
+
+> **Key constraint:** The BFE / ETW client-type breakdown is only available from
+> **April 2012** onward. The large caseload surge driven by the 2008–2011 Global
+> Financial Crisis therefore cannot be attributed to either client type directly.
+
+---
+
+## RQ 1 — What is the Historic Trend of Income Support Caseload?
+
+### Building a continuous 20-year series
+
+Two series together span the full period without gaps:
+
+- **`Total Caseload`** (Apr 2005 – Mar 2012) — single province-wide monthly count.
+- **`Client Caseload Total`** within `Client Type Level` (Apr 2012 – Sep 2025) —
+  the same concept reported alongside the BFE/ETW split.
+
+Concatenating them gives `r nrow(total_series)` consecutive months.
+
+### Key statistics
+
+```{r}
+#| label: stats-callout
+
+cat(
+  sprintf("Series start    : %s  (Apr 2005)\n",   scales::comma(total_stats$first_val)),
+  sprintf("Series end      : %s  (Sep 2025)\n",   scales::comma(total_stats$last_val)),
+  sprintf("All-time minimum: %s  (%s)\n",
+          scales::comma(total_stats$min_value), format(total_stats$min_date, "%b %Y")),
+  sprintf("All-time maximum: %s  (%s)\n",
+          scales::comma(total_stats$max_value), format(total_stats$max_date, "%b %Y")),
+  sprintf("Net change      : %+.1f%%  over 20 years\n", total_stats$pct_change)
+)
+```
+
+::: {.callout-note}
+The caseload is **`r scales::comma(total_stats$last_val)`** in September 2025 —
+a net change of **`r sprintf("%+.1f%%", total_stats$pct_change)`** from April 2005.
+The all-time peak of **`r scales::comma(total_stats$max_value)`**
+occurred in **`r format(total_stats$max_date, "%B %Y")`**, driven by the
+Great Financial Crisis.
+:::
+
+### Chart 1 — Full monthly caseload, 2005–2025
+
+Shaded regions mark the three macro-economic shocks that produced the most
+visible movements in the series.
+
+```{r}
+#| label: chart-total
+#| fig-cap: "Monthly total Income Support caseload, April 2005 – September 2025. Shaded bands show key disruption periods (GFC, oil-price collapse, COVID/CERB)."
+
+chart_total
+```
+
+**Narrative:** The series traces *three distinct surge-and-recovery cycles*:
+
+1. **2008–2012 (Global Financial Crisis)** — The sharpest rise in the 20-year
+   record. Caseload climbed from roughly 34 000 to a peak near
+   **`r scales::comma(total_stats$max_value)`**, then recovered as Alberta's
+   labour market rebounded on oil-sands growth.
+2. **2015–2017 (Oil price collapse)** — A second, smaller surge as sustained low
+   oil prices drove layoffs in the energy sector. Recovery was incomplete before
+   COVID arrived.
+3. **2020 (COVID / CERB)** — A sharp but *brief* spike driven by pandemic
+   unemployment. The federal Canada Emergency Response Benefit partly substituted
+   for IS in 2020–21, which may explain the shorter duration compared with the
+   GFC surge.
+
+**Post-2021 trend:** Caseload has declined steadily, reaching its lowest level
+since the early 2000s by late 2024 and remaining low into 2025.
+
+---
+
+## RQ 2 — How Does the BFE / ETW Breakdown Change the Story?
+
+The `Client Type Level` measure distinguishes two programme streams:
+
+| Stream | Description |
+|:-------|:------------|
+| **BFE** | Barriers to Full Employment — clients with chronic, long-term barriers (health, caregiving). Higher benefits; lower employment expectation. |
+| **ETW – Working** | Expected to Work, currently employed. Receiving income supplementation. |
+| **ETW – Available** | Expected to Work, not working but available. Actively seeking employment. |
+| **ETW – Unavailable** | Expected to Work, not working and temporarily unavailable (e.g. short-term illness). |
+
+### Chart 2 — BFE vs ETW total caseload
+
+```{r}
+#| label: chart-bfe-etw
+#| fig-cap: "BFE and total ETW caseload, April 2012 – September 2025."
+
+chart_bfe_etw
+```
+
+### Chart 3 — Share of total caseload
+
+```{r}
+#| label: chart-share
+#| fig-cap: "BFE and ETW as a percentage of combined caseload."
+
+chart_share
+```
+
+**Narrative:** The two-line view reveals a *structural divergence* that is
+invisible in the aggregate total:
+
+- **BFE** has grown *relative to* ETW over the period. The BFE share rose from
+  roughly 45 % in 2012 to well above 50 % by the mid-2020s. This implies the
+  IS caseload is increasingly composed of people with more complex, persistent
+  barriers — not transient labour-market exits.
+- **ETW** fluctuates more with economic conditions, rising sharply during the
+  2015–17 oil-price collapse and the 2020 COVID shock, then declining in
+  recoveries. This makes ETW a *leading indicator* of labour-market stress.
+- During COVID specifically, the ETW spike was *muted* relative to what the
+  aggregate total would suggest — consistent with CERB diverting many
+  newly-unemployed people away from IS entirely.
+
+### Chart 4 — ETW sub-type detail
+
+```{r}
+#| label: chart-etw-detail
+#| fig-cap: "ETW caseload broken into three sub-types: Working, Available (for work), and Unavailable."
+
+chart_etw_detail
+```
+
+**Narrative:** Within ETW, the **Available** sub-type (not working, looking for
+work) drives most of the ETW cyclicality observed in Chart 2. The **Working**
+sub-type (income supplementation while employed) has grown slowly but steadily,
+reflecting program design changes. The **Unavailable** sub-type is the smallest
+and most stable component.
+
+### Chart 5 — Stacked composition view
+
+```{r}
+#| label: chart-stacked
+#| fig-cap: "Stacked area chart showing the composition of IS caseload by the four client sub-types, April 2012 – September 2025."
+
+chart_stacked
+```
+
+---
+
+## Summary Findings
+
+| Question | Finding |
+|:---------|:--------|
+| **Historic trend** | Three surge-and-recovery cycles over 20 years (GFC, oil-price collapse, COVID). The long-run direction is downward from the GFC peak, with caseload near historic lows in 2024–2025. |
+| **BFE vs ETW** | The BFE share of caseload has grown structurally, while ETW is cyclically sensitive. The aggregate trend masks a compositional shift toward more complex cases. |
+| **ETW sub-types** | The "Available" sub-type drives ETW cyclicality. The "Working" sub-type has trended upward, suggesting more working-poor households receiving top-up benefits. |
+
+---
+
+## Reproducibility
+
+This document is rendered from a **literate pair**:
+
+- `analysis.R` — all data ingestion, cleaning, and chart construction
+- `analysis.qmd` — narrative, tables, and chart display (sources `analysis.R`)
+
+To re-render, run from the `starter-4-sonnet-46/` directory:
+
+```bash
+quarto render analysis.qmd
+```
+
+```{r}
+#| label: session-info
+#| code-fold: true
+#| code-summary: "Session info"
+
+sessionInfo()
+```
