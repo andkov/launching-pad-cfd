@@ -1,0 +1,122 @@
+---
+title: "Alberta Income Support Caseload Analysis"
+author: "AI Assistant"
+date: "April 15, 2026"
+format:
+  html:
+    toc: true
+    embed-resources: true
+    theme: cosmo
+execute:
+  warning: false
+  message: false
+---
+
+## Introduction
+
+This report analyzes the historic trend of the Alberta Income Support caseload from April 2005 to September 2025. It examines both the overall caseload and its primary components: **Barriers to Full Employment (BFE)** and **Expected to Work (ETW)**. 
+
+The data is sourced from the Alberta Open Government portal: "Income Support Aggregated Caseload Data".
+
+## Data Preparation
+
+Below, we load the raw CSV, parse the dates, and clean up formatting. We single out the "Total Caseload" for the historic overall trend and the "Client Type Level" indicators to separate out BFE and ETW.
+
+```{r setup}
+library(tidyverse)
+library(lubridate)
+library(scales)
+
+# Read raw dataset
+# Row 1 is a merged title, Row 2 has the headers. We skip the first row.
+data_path <- "../../is-aggregated-data-april-2005-sep-2025.csv"
+
+raw_data <- read_csv(data_path, skip = 1, show_col_types = FALSE) %>%
+  # Remove trailing empty columns 
+  select(Ref_Date, Geography, `Measure Type`, Measure, Value) %>%
+  # Filter out fully empty rows if any
+  filter(!is.na(Ref_Date))
+
+# Clean 'Value' column which contains commas and spaces (e.g., " 27,969 ")
+# Parse dates (e.g. "05-Apr" goes to 2005-04-01)
+cleaned_data <- raw_data %>%
+  mutate(
+    Value = as.numeric(str_remove_all(Value, "[^0-9]")),
+    # Ref_Date is formatted as "YY-Mon" (e.g. 05-Apr)
+    Date = as.Date(parse_date_time(Ref_Date, "%y-%b"))
+  )
+```
+
+## Overall Historic Trend of Income Support Caseload
+
+First, we address the historic trend of the Income Support caseload.
+
+```{r overall-trend}
+overall_trend <- cleaned_data %>%
+  filter(`Measure Type` == "Total Caseload", Measure == "Total Caseload")
+
+ggplot(overall_trend, aes(x = Date, y = Value)) +
+  geom_line(color = "navy", linewidth = 1) +
+  theme_minimal() +
+  scale_y_continuous(labels = comma) +
+  labs(
+    title = "Historical Trend of Total Income Support Caseload",
+    subtitle = "Alberta (April 2005 - September 2025)",
+    x = "Date",
+    y = "Total Caseload"
+  )
+```
+
+The overall historical trend reveals significant fluctuations across the past two decades. The caseload has experienced substantial peaks (e.g., likely coinciding with major economic recessions or global events) and extended periods of decline or stabilization. 
+
+## Understanding the Caseload: BFE vs. ETW
+
+To understand how the story changes when breaking it down by client types, we categorize the "Client Type Level" values into two main groups based on the dataset's definitions:
+- **Expected to Work (ETW)**
+- **Barriers to Full Employment (BFE)**
+
+```{r client-type-trend}
+client_type_data <- cleaned_data %>%
+  filter(`Measure Type` == "Client Type Level") %>%
+  # Classify records as matching BFE or ETW
+  mutate(
+    Client_Category = case_when(
+      str_detect(Measure, "^BFE") ~ "Barriers to Full Employment (BFE)",
+      str_detect(Measure, "^ETW") ~ "Expected to Work (ETW)",
+      TRUE ~ "Other"
+    )
+  ) %>%
+  # We only care about BFE and ETW categories
+  filter(Client_Category %in% c("Barriers to Full Employment (BFE)", "Expected to Work (ETW)")) %>%
+  # Since ETW has multiple subgroup measures, we sum them by Date and Category
+  group_by(Date, Client_Category) %>%
+  summarize(Total_Value = sum(Value, na.rm = TRUE), .groups = "drop")
+
+ggplot(client_type_data, aes(x = Date, y = Total_Value, color = Client_Category)) +
+  geom_line(linewidth = 1) +
+  theme_minimal() +
+  scale_y_continuous(labels = comma) +
+  scale_color_manual(values = c("Barriers to Full Employment (BFE)" = "darkorange", 
+                                "Expected to Work (ETW)" = "steelblue")) +
+  labs(
+    title = "Income Support Caseload by Client Type",
+    subtitle = "Comparing BFE and ETW trajectories",
+    x = "Date",
+    y = "Caseload",
+    color = "Client Category"
+  ) +
+  theme(legend.position = "bottom")
+
+```
+
+### How Does the Breakdown Change the Story?
+
+By splitting the caseload into **BFE** and **ETW**, the single trend line tells two distinct stories:
+
+1. **BFE (Barriers to Full Employment):** 
+   The BFE caseload shows a relatively slow-moving, structurally stable or steadily increasing trajectory overall. This population comprises clients facing persistent health or life barriers, making them less reactive to short-term economic fluctuations.
+   
+2. **ETW (Expected to Work):** 
+   The ETW caseload demonstrates extreme volatility. It serves as an immediate reflection of the labor market and broader macroeconomic shocks (e.g., energy price crashes, recessions, pandemics). When the overall caseload spikes rapidly, it is almost entirely driven by people looking for temporary assistance while they are able to work but cannot secure adequate employment. When the economy recovers, the ETW numbers drop quickly.
+
+In conclusion, an overall look at Income Support caseloads obscures the underlying mechanisms. The BFE group provides a steady baseline of individuals needing long-term assistance, while the ETW group accounts for nearly all cyclical surges and drops.

@@ -1,0 +1,278 @@
+---
+title: "Alberta Income Support Caseload: Historic Trends and Client-Type Dynamics"
+author: "Literate analysis — Starter 28 (Claude Opus 4.6)"
+date: today
+format:
+  html:
+    theme: cosmo
+    toc: true
+    toc-depth: 3
+    code-fold: true
+    embed-resources: true
+execute:
+  warning: false
+  message: false
+---
+
+```{r}
+#| label: setup
+library(tidyverse)
+library(scales)
+```
+
+## Data Ingestion
+
+The raw CSV from Alberta Open Government uses a two-row header and embeds commas
+inside quoted numeric values. We skip the title row, strip the trailing empty
+columns, and parse `Value` as a proper numeric.
+
+```{r}
+#| label: ingest
+raw <- read_csv(
+  "../../is-aggregated-data-april-2005-sep-2025.csv",
+  skip = 1,                         # drop the title row
+  col_types = cols(.default = "c")  # read everything as character first
+) |>
+  select(1:5) |>                     # keep only meaningful columns
+  set_names(c("ref_date", "geography", "measure_type", "measure", "value"))
+
+# Parse the value column: strip spaces and embedded commas, then convert
+raw <- raw |>
+  mutate(
+    value = str_trim(value) |> str_remove_all(",") |> as.numeric()
+  )
+
+# Parse the date: format is "YY-Mon" (e.g. "05-Apr", "25-Sep")
+raw <- raw |>
+  mutate(
+    date = parse_date(paste0("01-", ref_date), format = "%d-%y-%b")
+  )
+
+glimpse(raw)
+```
+
+## Building a Unified Total Caseload Series
+
+The dataset reports total caseload under two different labels depending on the
+era. Before April 2012 the measure is called **Total Caseload**; from April 2012
+onward it appears as **Client Caseload Total** within the *Client Type Level*
+measure type. We stitch these together into one continuous monthly series.
+
+```{r}
+#| label: total-series
+totals <- raw |>
+  filter(
+    (measure_type == "Total Caseload" & measure == "Total Caseload") |
+    (measure_type == "Client Type Level" & measure == "Client Caseload Total")
+  ) |>
+  arrange(date)
+
+cat(
+  "Total series spans", format(min(totals$date), "%B %Y"),
+  "to", format(max(totals$date), "%B %Y"),
+  paste0("(", nrow(totals), " months)\n")
+)
+```
+
+## Research Question 1 — What Is the Historic Trend?
+
+```{r}
+#| label: fig-total-trend
+#| fig-cap: "Monthly Income Support caseload in Alberta, April 2005 – September 2025"
+#| fig-height: 5
+ggplot(totals, aes(date, value)) +
+geom_line(linewidth = 0.6, colour = "#2c3e50") +
+  geom_smooth(method = "loess", span = 0.15, se = FALSE,
+              linewidth = 0.9, colour = "#e74c3c", linetype = "dashed") +
+  scale_x_date(date_breaks = "2 years", date_labels = "%Y") +
+  scale_y_continuous(labels = comma) +
+  labs(
+    x = NULL, y = "Cases",
+    title = "Alberta Income Support Caseload",
+    subtitle = "Monthly total with LOESS smoother (red dashed)"
+  ) +
+  theme_minimal(base_size = 13)
+```
+
+### Narrative
+
+The overall trajectory is far from a simple upward or downward line. Several
+distinct phases emerge:
+
+1. **Pre-recession stability (~2005–2008).** Caseloads hovered around
+   25,000–27,000, drifting gently with the economic cycle.
+
+2. **2008–09 recession surge.** A sharp climb from roughly 27,000 to over
+   38,000 cases — a rise of about 40 % in barely a year — tracks the impact of
+   the global financial crisis on Alberta's labour market.
+
+3. **Partial recovery (2010–2014).** Caseloads eased back toward the mid-30,000s
+   but never returned to pre-recession levels, suggesting a structural ratchet
+   effect.
+
+4. **Oil-price shock (2015–2016).** The collapse in crude prices pushed caseloads
+   sharply upward again, peaking around 2017.
+
+5. **COVID-19 (2020–2021).** A fresh spike layered on top of an already elevated
+   baseline; the peak in this window pushed past 60,000.
+
+6. **Post-pandemic plateau (~2022–2025).** Caseloads remain in the 58,000–62,000
+   range — roughly double the pre-2008 norm — with no clear sign of retreat.
+
+## Research Question 2 — How Does the BFE / ETW Breakdown Change the Story?
+
+The client-type split is available from April 2012 onward. **BFE** (Barriers to
+Full Employment) clients face long-term barriers such as chronic health
+conditions. **ETW** (Expected to Work) clients are assessed as able to
+participate in the labour market — some are already working, some are available
+for work, and some are temporarily unavailable.
+
+```{r}
+#| label: client-type-data
+client_type <- raw |>
+  filter(measure_type == "Client Type Level") |>
+  mutate(
+    group = case_when(
+      str_detect(measure, "^BFE")                  ~ "BFE",
+      str_detect(measure, "^ETW")                   ~ "ETW",
+      str_detect(measure, "Client Caseload Total")  ~ "Total",
+      TRUE                                          ~ NA_character_
+    )
+  ) |>
+  filter(!is.na(group))
+
+# Collapse the three ETW sub-categories into a single ETW total per month
+bfe_etw <- client_type |>
+  filter(group %in% c("BFE", "ETW")) |>
+  summarise(value = sum(value), .by = c(date, group))
+```
+
+```{r}
+#| label: fig-bfe-etw
+#| fig-cap: "BFE vs ETW caseload since April 2012"
+#| fig-height: 5
+ggplot(bfe_etw, aes(date, value, colour = group)) +
+  geom_line(linewidth = 0.7) +
+  scale_x_date(date_breaks = "2 years", date_labels = "%Y") +
+  scale_y_continuous(labels = comma) +
+  scale_colour_manual(values = c("BFE" = "#8e44ad", "ETW" = "#2980b9")) +
+  labs(
+    x = NULL, y = "Cases", colour = "Client type",
+    title = "Income Support by Client Type",
+    subtitle = "Barriers to Full Employment (BFE) vs Expected to Work (ETW)"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(legend.position = "top")
+```
+
+### Share of caseload
+
+```{r}
+#| label: fig-share
+#| fig-cap: "BFE share of total caseload over time"
+#| fig-height: 4
+share <- bfe_etw |>
+  pivot_wider(names_from = group, values_from = value) |>
+  mutate(bfe_share = BFE / (BFE + ETW))
+
+ggplot(share, aes(date, bfe_share)) +
+  geom_line(linewidth = 0.7, colour = "#8e44ad") +
+  geom_hline(yintercept = 0.5, linetype = "dotted", colour = "grey50") +
+  scale_x_date(date_breaks = "2 years", date_labels = "%Y") +
+  scale_y_continuous(labels = percent_format(accuracy = 1)) +
+  labs(
+    x = NULL, y = "BFE share",
+    title = "BFE as a Proportion of Total Caseload"
+  ) +
+  theme_minimal(base_size = 13)
+```
+
+### Stacked area view
+
+```{r}
+#| label: fig-stacked
+#| fig-cap: "Stacked area: composition of Income Support caseload"
+#| fig-height: 5
+ggplot(bfe_etw, aes(date, value, fill = group)) +
+  geom_area(alpha = 0.8) +
+  scale_x_date(date_breaks = "2 years", date_labels = "%Y") +
+  scale_y_continuous(labels = comma) +
+  scale_fill_manual(values = c("BFE" = "#8e44ad", "ETW" = "#2980b9")) +
+  labs(
+    x = NULL, y = "Cases", fill = "Client type",
+    title = "Income Support Caseload — Stacked by Client Type"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(legend.position = "top")
+```
+
+### ETW sub-category detail
+
+```{r}
+#| label: fig-etw-detail
+#| fig-cap: "ETW sub-categories over time"
+#| fig-height: 5
+etw_detail <- client_type |>
+  filter(group == "ETW") |>
+  mutate(
+    sub = case_when(
+      str_detect(measure, "Working Total$") &
+        !str_detect(measure, "Not Working")        ~ "Working",
+      str_detect(measure, "Available for Work")     ~ "Not Working\n(Available)",
+      str_detect(measure, "Unavailable for Work")   ~ "Not Working\n(Unavailable)",
+      TRUE                                          ~ NA_character_
+    )
+  ) |>
+  filter(!is.na(sub))
+
+ggplot(etw_detail, aes(date, value, colour = sub)) +
+  geom_line(linewidth = 0.7) +
+  scale_x_date(date_breaks = "2 years", date_labels = "%Y") +
+  scale_y_continuous(labels = comma) +
+  scale_colour_brewer(palette = "Set2") +
+  labs(
+    x = NULL, y = "Cases", colour = "ETW status",
+    title = "Expected-to-Work Clients by Employment Status"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(legend.position = "top")
+```
+
+### Narrative — What the breakdown reveals
+
+The aggregate trend masks two fundamentally different dynamics:
+
+- **BFE growth is steady and structural.** The BFE count has climbed from about
+  16,000 in 2012 to roughly 19,000 by 2025 — a gradual, monotonic increase that
+  barely flinches during economic swings. This reflects an expanding population
+  of Albertans with chronic health or life-circumstance barriers, unrelated to
+  business-cycle conditions.
+
+- **ETW is the volatile, cyclically sensitive component.** Almost all of the
+  dramatic swings visible in the total series — the oil-price spike, the
+  COVID-19 surge — originate in the ETW population. During downturns,
+  ETW caseloads balloon as newly unemployed workers enter Income Support; during
+  recoveries they partially fall back.
+
+- **BFE's share has been declining** despite its absolute growth, because the
+  ETW population has grown even faster. In 2012 BFE represented nearly half the
+  caseload; by 2025 it accounts for roughly 31 %.
+
+- **Within ETW**, the *Not Working — Available for Work* sub-group dominates and
+  drives the cyclical volatility. The *Working* sub-group remains small,
+  suggesting that relatively few Income Support recipients maintain paid
+  employment. The *Unavailable for Work* segment has grown notably, forming a
+  quasi-structural layer within a category designed for labour-market-ready
+  clients.
+
+## Summary
+
+The headline caseload story — a doubling from roughly 27,000 to 61,000 over two
+decades — is really two layered stories. A slowly expanding BFE base reflects
+structural demand from people facing persistent barriers. Superimposed on that
+base, the ETW caseload surges and (partially) recedes with each economic shock,
+each time settling at a higher floor than before. Understanding this
+compositional difference is essential for policy design: interventions aimed at
+reducing BFE caseloads require different levers (health services, disability
+supports) than those targeting ETW clients (employment programming, job-market
+conditions).

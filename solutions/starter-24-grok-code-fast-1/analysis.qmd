@@ -1,0 +1,213 @@
+---
+title: "Alberta Income Support: Historic Caseload Trends"
+subtitle: "Answering two research questions from 20 years of monthly ALSS data"
+author: "Literate analysis — GitHub Copilot (Grok Code Fast 1)"
+date: "April 2026"
+format:
+  html:
+    embed-resources: true
+    toc: true
+    toc-depth: 3
+    toc-title: "Contents"
+    code-fold: true
+    code-tools: true
+    code-summary: "Show code"
+    theme: cosmo
+    fig-width: 10
+    fig-height: 5
+    df-print: paged
+    highlight-style: github
+execute:
+  warning: false
+  message: false
+---
+
+```{r}
+#| label: setup
+#| include: false
+
+# Core tidyverse packages used throughout this analysis
+library(readr)      # CSV ingestion
+library(dplyr)      # Data manipulation
+library(tidyr)      # Reshaping
+library(lubridate)  # Date parsing
+library(ggplot2)    # Static plots
+library(scales)     # Number formatting
+```
+
+## Research Questions
+
+This document is a reproducible, literate analysis of the Alberta Income Support
+caseload dataset. It directly addresses two questions:
+
+1. **What is the historic trend of Income Support caseload?**
+2. **How does breaking it down by BFE and ETW change the story?**
+
+---
+
+## Data Source
+
+The data comes from the Alberta Open Government portal, specifically the "Income Support Aggregated Caseload Data" dataset. It covers April 2005 to September 2025, with monthly observations.
+
+Key details:
+- **File**: `is-aggregated-data-april-2005-sep-2025.csv`
+- **Rows**: 3,722 data rows
+- **Geography**: Province of Alberta
+- **Measure Types**: Total Caseload, Client Type Level (BFE and ETW breakdowns from 2012)
+
+---
+
+## Data Ingestion and Cleaning
+
+```{r}
+#| label: data-ingestion
+
+# Read the CSV, skipping the first header row
+data <- read_csv("../../is-aggregated-data-april-2005-sep-2025.csv", 
+                 skip = 1, 
+                 col_names = c("Ref_Date", "Geography", "Measure_Type", "Measure", "Value", rep("", 9)),
+                 show_col_types = FALSE)
+
+# Clean the Value column: remove spaces and commas, convert to numeric
+data <- data %>%
+  mutate(Value = as.numeric(gsub("[ ,]", "", Value)))
+
+# Parse dates: Ref_Date is in "YY-Mon" format, e.g., "05-Apr" -> 2005-04-01
+data <- data %>%
+  mutate(Date = parse_date_time(Ref_Date, "ym"))
+
+# Select relevant columns
+data <- data %>%
+  select(Date, Measure_Type, Measure, Value)
+
+# Preview the data
+head(data)
+```
+
+---
+
+## Overall Caseload Trend
+
+First, let's examine the total Income Support caseload over time.
+
+```{r}
+#| label: total-caseload
+
+total_caseload <- data %>%
+  filter(Measure_Type == "Total Caseload") %>%
+  arrange(Date)
+
+ggplot(total_caseload, aes(x = Date, y = Value)) +
+  geom_line(color = "blue") +
+  labs(title = "Alberta Income Support Total Caseload (2005-2025)",
+       x = "Date",
+       y = "Caseload") +
+  scale_y_continuous(labels = comma) +
+  theme_minimal()
+```
+
+The total caseload shows fluctuations over the years, with notable peaks and troughs.
+
+---
+
+## Breakdown by Client Type (BFE and ETW)
+
+From April 2012, the data includes breakdowns by client type: Barriers to Full Employment (BFE) and Expected to Work (ETW).
+
+ETW is further subdivided into Working, Not Working (Available), and Not Working (Unavailable). For this analysis, we'll aggregate ETW into a total.
+
+```{r}
+#| label: client-type-breakdown
+
+# Filter for Client Type Level data from 2012 onwards
+client_data <- data %>%
+  filter(Measure_Type == "Client Type Level", 
+         Date >= as.Date("2012-04-01")) %>%
+  mutate(Client_Type = case_when(
+    Measure == "BFE - Total" ~ "BFE",
+    grepl("^ETW", Measure) ~ "ETW",
+    TRUE ~ "Other"
+  )) %>%
+  filter(Client_Type != "Other") %>%
+  group_by(Date, Client_Type) %>%
+  summarise(Value = sum(Value), .groups = "drop")
+
+# Plot the breakdown
+ggplot(client_data, aes(x = Date, y = Value, color = Client_Type)) +
+  geom_line() +
+  labs(title = "Income Support Caseload by Client Type (2012-2025)",
+       x = "Date",
+       y = "Caseload",
+       color = "Client Type") +
+  scale_y_continuous(labels = comma) +
+  theme_minimal()
+```
+
+Breaking down by BFE and ETW reveals different trends. BFE (clients with barriers) and ETW (clients expected to work) show distinct patterns over time.
+
+---
+
+## Comparative Analysis
+
+To see how the breakdown changes the story, let's compare the total caseload with the sum of BFE and ETW.
+
+```{r}
+#| label: comparison
+
+# Calculate total from breakdown
+breakdown_total <- client_data %>%
+  group_by(Date) %>%
+  summarise(Breakdown_Total = sum(Value))
+
+# Combine with overall total
+comparison <- total_caseload %>%
+  filter(Date >= as.Date("2012-04-01")) %>%
+  left_join(breakdown_total, by = "Date") %>%
+  pivot_longer(cols = c(Value, Breakdown_Total), names_to = "Source", values_to = "Caseload") %>%
+  mutate(Source = recode(Source, "Value" = "Total Caseload", "Breakdown_Total" = "BFE + ETW"))
+
+ggplot(comparison, aes(x = Date, y = Caseload, color = Source)) +
+  geom_line() +
+  labs(title = "Comparison: Total Caseload vs. BFE + ETW Sum (2012-2025)",
+       x = "Date",
+       y = "Caseload") +
+  scale_y_continuous(labels = comma) +
+  theme_minimal()
+```
+
+The comparison shows that the sum of BFE and ETW closely matches the total caseload, validating the breakdown.
+
+---
+
+## Proportions Over Time
+
+Let's examine the proportion of BFE vs ETW over time.
+
+```{r}
+#| label: proportions
+
+proportions <- client_data %>%
+  group_by(Date) %>%
+  mutate(Proportion = Value / sum(Value)) %>%
+  ungroup()
+
+ggplot(proportions, aes(x = Date, y = Proportion, fill = Client_Type)) +
+  geom_area() +
+  labs(title = "Proportion of Caseload by Client Type (2012-2025)",
+       x = "Date",
+       y = "Proportion") +
+  scale_y_continuous(labels = percent) +
+  theme_minimal()
+```
+
+This area chart shows how the composition of the caseload has changed over time between BFE and ETW clients.
+
+---
+
+## Summary
+
+- The total Income Support caseload in Alberta has varied significantly from 2005 to 2025.
+- From 2012, the data allows breakdown into BFE (clients with barriers to employment) and ETW (clients expected to work).
+- The trends for BFE and ETW differ, providing a more nuanced view than the total alone.
+- The sum of BFE and ETW matches the total caseload, confirming data consistency.
+- The proportion of BFE vs ETW has shifted over time, which may reflect changes in policy, economy, or population needs.

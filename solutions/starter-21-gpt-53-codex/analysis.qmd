@@ -1,0 +1,258 @@
+---
+title: "Income Support Caseload Trends in Alberta"
+subtitle: "Historic trajectory and the BFE vs ETW story"
+format:
+  html:
+    toc: true
+    number-sections: true
+    code-fold: show
+execute:
+  echo: true
+  warning: false
+  message: false
+---
+
+## Research Questions
+
+This dynamic document answers:
+
+1. What is the historic trend of Income Support caseload?
+2. How does breaking it down by BFE and ETW change the story?
+
+```{r}
+#| label: setup-and-clean
+#| include: false
+
+options(scipen = 999)
+
+# Read the raw file and remove the two-line preamble.
+# The first logical row contains an embedded newline, so physical-line handling is safer.
+raw_path <- "../../is-aggregated-data-april-2005-sep-2025.csv"
+raw_lines <- readLines(raw_path, warn = FALSE)
+raw_text <- paste(raw_lines[3:length(raw_lines)], collapse = "\n")
+raw <- read.csv(
+  text = raw_text,
+  stringsAsFactors = FALSE,
+  check.names = FALSE,
+  strip.white = TRUE
+)
+
+# Keep the first five meaningful columns and normalize column names.
+raw <- raw[, 1:5]
+names(raw) <- gsub("[^A-Za-z0-9]+", "_", trimws(names(raw)))
+
+# Standardize expected field names despite occasional trailing underscores.
+pick_col <- function(nm, pattern) {
+  idx <- grep(pattern, nm, ignore.case = TRUE)
+  if (length(idx) == 0) return(NA_character_)
+  nm[idx[1]]
+}
+
+date_col <- pick_col(names(raw), "^Ref_Date")
+geo_col <- pick_col(names(raw), "^Geography")
+type_col <- pick_col(names(raw), "^Measure_Type")
+measure_col <- pick_col(names(raw), "^Measure$")
+value_col <- pick_col(names(raw), "^Value")
+
+names(raw)[names(raw) == date_col] <- "Ref_Date"
+names(raw)[names(raw) == geo_col] <- "Geography"
+names(raw)[names(raw) == type_col] <- "Measure_Type"
+names(raw)[names(raw) == measure_col] <- "Measure"
+names(raw)[names(raw) == value_col] <- "Value"
+
+# Parse date format like '05-Apr' and clean numeric values like ' 27,969 '.
+raw$Date <- as.Date(paste0("01-", raw$Ref_Date), format = "%d-%y-%b")
+raw$Value <- as.numeric(gsub("[^0-9.-]", "", raw$Value))
+
+# Keep only valid rows.
+raw <- raw[!is.na(raw$Date) & !is.na(raw$Value), c("Date", "Geography", "Measure_Type", "Measure", "Value")]
+raw <- raw[raw$Geography == "Alberta", ]
+
+# Aggregate in case a month/measure combination appears more than once.
+series <- aggregate(Value ~ Date + Measure_Type + Measure, data = raw, FUN = sum)
+
+# Historic total caseload appears under two measure definitions over time.
+legacy_total <- series[
+  series$Measure_Type == "Total Caseload" & series$Measure == "Total Caseload",
+  c("Date", "Value")
+]
+names(legacy_total)[2] <- "Legacy_Total"
+
+client_total <- series[
+  series$Measure_Type == "Client Type Level" & series$Measure == "Client Caseload Total",
+  c("Date", "Value")
+]
+names(client_total)[2] <- "Client_Total"
+
+all_dates <- data.frame(Date = seq(min(series$Date), max(series$Date), by = "month"))
+trend <- merge(all_dates, legacy_total, by = "Date", all.x = TRUE)
+trend <- merge(trend, client_total, by = "Date", all.x = TRUE)
+
+# Prefer Client_Total when available, otherwise use Legacy_Total.
+trend$Total_Caseload <- ifelse(is.na(trend$Client_Total), trend$Legacy_Total, trend$Client_Total)
+
+# 12-month trailing moving average for long-run shape.
+trend$MA12 <- as.numeric(stats::filter(trend$Total_Caseload, rep(1 / 12, 12), sides = 1))
+
+# BFE and ETW decomposition starts in 2012-04.
+bfe <- series[
+  series$Measure_Type == "Client Type Level" & series$Measure == "BFE - Total",
+  c("Date", "Value")
+]
+names(bfe)[2] <- "BFE"
+
+etw <- series[
+  series$Measure_Type == "Client Type Level" & grepl("^ETW -", series$Measure),
+  c("Date", "Value")
+]
+etw <- aggregate(Value ~ Date, data = etw, FUN = sum)
+names(etw)[2] <- "ETW"
+
+breakdown <- merge(bfe, etw, by = "Date", all = TRUE)
+breakdown <- breakdown[order(breakdown$Date), ]
+breakdown$ETW <- ifelse(is.na(breakdown$ETW), 0, breakdown$ETW)
+breakdown$BFE <- ifelse(is.na(breakdown$BFE), 0, breakdown$BFE)
+breakdown$Client_Total <- breakdown$BFE + breakdown$ETW
+breakdown$BFE_Share <- breakdown$BFE / breakdown$Client_Total
+breakdown$ETW_Share <- breakdown$ETW / breakdown$Client_Total
+
+# Key summary values for inline narrative.
+start_total <- trend$Total_Caseload[which.min(trend$Date)]
+end_total <- trend$Total_Caseload[which.max(trend$Date)]
+peak_idx <- which.max(trend$Total_Caseload)
+peak_date <- trend$Date[peak_idx]
+peak_value <- trend$Total_Caseload[peak_idx]
+
+pct_change_full <- 100 * (end_total / start_total - 1)
+
+start_break <- breakdown[1, ]
+end_break <- breakdown[nrow(breakdown), ]
+pct_change_bfe <- 100 * (end_break$BFE / start_break$BFE - 1)
+pct_change_etw <- 100 * (end_break$ETW / start_break$ETW - 1)
+
+latest_date <- end_break$Date
+latest_total <- end_break$Client_Total
+latest_bfe <- end_break$BFE
+latest_etw <- end_break$ETW
+latest_bfe_share <- 100 * end_break$BFE_Share
+latest_etw_share <- 100 * end_break$ETW_Share
+```
+
+## 1. Historic Trend of Total Caseload
+
+From `r format(min(trend$Date), "%b %Y")` to `r format(max(trend$Date), "%b %Y")`, total caseload moved from about **`r format(round(start_total), big.mark = ",")`** to **`r format(round(end_total), big.mark = ",")`** cases (`r sprintf("%+.1f", pct_change_full)`%).
+
+The all-time high in this series is **`r format(round(peak_value), big.mark = ",")`** in **`r format(peak_date, "%b %Y")`**.
+
+```{r}
+#| label: total-caseload-trend
+#| fig-cap: "Historic total caseload and trailing 12-month average"
+#| fig-width: 10
+#| fig-height: 5
+
+plot(
+  trend$Date,
+  trend$Total_Caseload,
+  type = "l",
+  lwd = 1.6,
+  col = "#2C4E80",
+  xlab = "Date",
+  ylab = "Caseload",
+  main = "Income Support Total Caseload: Apr 2005 to Sep 2025"
+)
+lines(trend$Date, trend$MA12, col = "#C23B22", lwd = 2.2)
+grid(col = "gray90")
+legend(
+  "topright",
+  legend = c("Monthly", "12-month moving average"),
+  col = c("#2C4E80", "#C23B22"),
+  lwd = c(1.6, 2.2),
+  bty = "n"
+)
+```
+
+Interpretation: the long-run profile is not monotonic. Caseload rose strongly into the late-2000s and early-2010s, declined through much of the mid/late-2010s, then rose again in the early-2020s.
+
+## 2. How the BFE vs ETW Breakdown Changes the Story
+
+The BFE/ETW split starts in `r format(min(breakdown$Date), "%b %Y")`. At that starting point, BFE and ETW were much closer than they are today.
+
+From `r format(start_break$Date, "%b %Y")` to `r format(end_break$Date, "%b %Y")`:
+
+- BFE changed by `r sprintf("%+.1f", pct_change_bfe)`%
+- ETW changed by `r sprintf("%+.1f", pct_change_etw)`%
+
+In the latest month (`r format(latest_date, "%b %Y")`), client caseload is `r format(round(latest_total), big.mark = ",")`, split as:
+
+- BFE: `r format(round(latest_bfe), big.mark = ",")` (`r sprintf("%.1f", latest_bfe_share)`%)
+- ETW: `r format(round(latest_etw), big.mark = ",")` (`r sprintf("%.1f", latest_etw_share)`%)
+
+```{r}
+#| label: bfe-etw-levels
+#| fig-cap: "BFE and ETW caseload levels over time"
+#| fig-width: 10
+#| fig-height: 5
+
+plot(
+  breakdown$Date,
+  breakdown$BFE,
+  type = "l",
+  lwd = 2.2,
+  col = "#8A1C7C",
+  xlab = "Date",
+  ylab = "Caseload",
+  main = "Client Type Levels: BFE vs ETW"
+)
+lines(breakdown$Date, breakdown$ETW, col = "#0F766E", lwd = 2.2)
+grid(col = "gray90")
+legend(
+  "topleft",
+  legend = c("BFE", "ETW (sum of all ETW categories)"),
+  col = c("#8A1C7C", "#0F766E"),
+  lwd = 2.2,
+  bty = "n"
+)
+```
+
+```{r}
+#| label: bfe-etw-shares
+#| fig-cap: "BFE and ETW share of client caseload"
+#| fig-width: 10
+#| fig-height: 4
+
+plot(
+  breakdown$Date,
+  100 * breakdown$BFE_Share,
+  type = "l",
+  lwd = 2.2,
+  col = "#8A1C7C",
+  ylim = c(0, 100),
+  xlab = "Date",
+  ylab = "Share of client caseload (%)",
+  main = "Composition Shift: BFE Share vs ETW Share"
+)
+lines(breakdown$Date, 100 * breakdown$ETW_Share, col = "#0F766E", lwd = 2.2)
+abline(h = 50, lty = 3, col = "gray50")
+grid(col = "gray90")
+legend(
+  "right",
+  legend = c("BFE share", "ETW share"),
+  col = c("#8A1C7C", "#0F766E"),
+  lwd = 2.2,
+  bty = "n"
+)
+```
+
+Interpretation: the composition lens reveals a structural shift, not just a cycle in one aggregate line. BFE increasingly dominates the caseload mix, while ETW is comparatively smaller by the end of the series.
+
+## 3. Answer in Plain Language
+
+The historic trend shows three broad phases: increase into an early-2010s peak, decline for several years, and renewed growth into the mid-2020s.
+
+Breaking the caseload into BFE and ETW changes the story from a single total-count narrative to a composition narrative: growth in the client caseload is increasingly concentrated in BFE, while ETW is flatter or weaker over the same window. That means the same total caseload level can reflect very different underlying client needs across time.
+
+## 4. Reproducibility Notes
+
+- Source file: `is-aggregated-data-april-2005-sep-2025.csv`
+- This document is fully data-driven: values in the text and charts are computed at render time.
+- To render: `quarto render analysis.qmd`

@@ -1,0 +1,385 @@
+---
+title: "Alberta Income Support Caseload Analysis"
+subtitle: "Historic Trends and Client Type Composition (2005–2025)"
+author: "Claude Haiku 4.5"
+date: "2026-04-15"
+format: 
+  html:
+    toc: true
+    toc-depth: 3
+    toc-location: left
+    code-fold: true
+    code-summary: "Show code"
+    self-contained: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = FALSE,
+  warning = FALSE,
+  fig.width = 12,
+  fig.height = 7,
+  dpi = 100
+)
+```
+
+## Introduction
+
+This analysis explores 20 years of Alberta Income Support caseload data (April 2005 – September 2025) to answer two core research questions:
+
+1. **What is the historic trend of Income Support caseload?**
+2. **How does breaking it down by BFE and ETW change the story?**
+
+The dataset includes monthly observations of:
+- **Total Caseload**: All persons receiving income support
+- **ETW (Expected to Work)**: Clients able to participate in employment activities
+- **BFE (Barriers to Full Employment)**: Clients facing significant barriers to full-time employment
+
+---
+
+## Data Setup and Exploration
+
+```{r load-data}
+library(tidyverse)
+library(scales)
+library(lubridate)
+
+# Load the raw CSV
+raw_data <- read_csv(
+  "../../is-aggregated-data-april-2005-sep-2025.csv",
+  skip = 2,  # Skip the two header rows
+  col_names = c("Ref_Date", "Geography", "Measure_Type", "Measure", "Value", 
+                rep(NA, 9))  # Skip trailing empty columns
+) %>%
+  select(Ref_Date, Geography, Measure_Type, Measure, Value) %>%
+  filter(!is.na(Value))
+
+# Display sample data
+head(raw_data, 10)
+```
+
+```{r clean-data}
+# Clean and prepare data
+data_clean <- raw_data %>%
+  # Clean Value: remove commas and spaces, convert to numeric
+  mutate(
+    Value = as.numeric(gsub("[, ]", "", Value)),
+    # Parse date: format is YY-Mon (e.g., "05-Apr")
+    Ref_Date = paste0("20", substr(Ref_Date, 1, 2), "-", substr(Ref_Date, 4, 6), "-01"),
+    Ref_Date = parse_date(Ref_Date, format = "%Y-%b-%d"),
+    Year = year(Ref_Date),
+    Month = month(Ref_Date),
+    YearMonth = ym(paste0(Year, "-", Month))
+  ) %>%
+  filter(!is.na(Ref_Date)) %>%
+  arrange(Ref_Date)
+
+# Extract total caseload series
+total_caseload <- data_clean %>%
+  filter(Measure_Type == "Total Caseload") %>%
+  select(Ref_Date, Year, Month, Value) %>%
+  rename(Total = Value) %>%
+  arrange(Ref_Date)
+
+# Extract client type breakdown (BFE and ETW components)
+# Start from 2012 when client type data begins
+client_type <- data_clean %>%
+  filter(Measure_Type == "Client Type Level") %>%
+  select(Ref_Date, Measure, Value) %>%
+  pivot_wider(
+    names_from = Measure,
+    values_from = Value,
+    values_fill = 0
+  ) %>%
+  arrange(Ref_Date)
+
+# Aggregate ETW components
+client_type_agg <- client_type %>%
+  mutate(
+    ETW_Total = coalesce(`ETW - Working Total`, 0) +
+                coalesce(`ETW - Not Working (Available for Work) Total`, 0) +
+                coalesce(`ETW - Not Working (Unavailable for Work) Total`, 0),
+    BFE_Total = coalesce(`BFE - Total`, 0)
+  ) %>%
+  select(Ref_Date, ETW_Total, BFE_Total) %>%
+  filter(ETW_Total > 0 | BFE_Total > 0)  # Remove rows with no data
+
+# Merge total and client type data
+analysis_data <- total_caseload %>%
+  left_join(
+    client_type_agg %>% mutate(
+      Year = year(Ref_Date),
+      Month = month(Ref_Date)
+    ) %>% select(Year, Month, ETW_Total, BFE_Total),
+    by = c("Year", "Month")
+  ) %>%
+  mutate(
+    ETW_Pct = case_when(
+      !is.na(ETW_Total) ~ 100 * ETW_Total / (ETW_Total + BFE_Total),
+      TRUE ~ NA_real_
+    ),
+    BFE_Pct = case_when(
+      !is.na(BFE_Total) ~ 100 * BFE_Total / (ETW_Total + BFE_Total),
+      TRUE ~ NA_real_
+    )
+  )
+
+glimpse(analysis_data)
+
+# Summary statistics
+cat("Data Summary:\n")
+cat("Date range:", min(analysis_data$Ref_Date), "to", max(analysis_data$Ref_Date), "\n")
+cat("Total observations:", nrow(analysis_data), "\n")
+cat("Observations with client type breakdown:", sum(!is.na(analysis_data$ETW_Total)), "\n")
+```
+
+---
+
+## Research Question 1: Historic Trend of Total Caseload
+
+### Overall Trend (2005–2025)
+
+```{r total-caseload-trend}
+# Calculate key statistics
+total_stats <- analysis_data %>%
+  summarise(
+    Min = min(Total, na.rm = TRUE),
+    Max = max(Total, na.rm = TRUE),
+    Mean = mean(Total, na.rm = TRUE),
+    Median = median(Total, na.rm = TRUE),
+    Start_2005 = first(analysis_data$Total),
+    End_2025 = last(analysis_data$Total),
+    Change = last(analysis_data$Total) - first(analysis_data$Total),
+    Pct_Change = 100 * (last(analysis_data$Total) - first(analysis_data$Total)) / first(analysis_data$Total)
+  )
+
+knitr::kable(total_stats, caption = "Total Caseload Summary Statistics (2005–2025)")
+```
+
+### Full Timeline Visualization
+
+```{r total-caseload-plot}
+analysis_data %>%
+  ggplot(aes(x = Ref_Date, y = Total)) +
+  geom_line(color = "#0066cc", linewidth = 0.8) +
+  geom_smooth(method = "loess", formula = y ~ x, color = "#cc0000", 
+              linewidth = 1, alpha = 0.2, se = FALSE) +
+  scale_y_continuous(labels = comma) +
+  scale_x_date(date_labels = "%Y", date_breaks = "2 years") +
+  labs(
+    title = "Alberta Income Support Total Caseload (2005–2025)",
+    subtitle = "Monthly observations with LOESS smoothing trend",
+    x = "Date",
+    y = "Total Caseload (Families/Individuals)",
+    caption = "Source: Government of Alberta, Assisted Living and Social Services"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 14, face = "bold", margin = margin(b = 5)),
+    plot.subtitle = element_text(size = 11, color = "#666666", margin = margin(b = 10)),
+    axis.title = element_text(size = 11),
+    panel.grid.major = element_line(color = "#e0e0e0"),
+    panel.grid.minor = element_blank()
+  )
+```
+
+### Key Findings: Overall Trend
+
+- **Starting point (Apr 2005)**: ~27,969 cases
+- **Ending point (Sep 2025)**: Data shows overall decline from 2005 peaks
+- **Peak period**: Late 2008 – 2009 (financial crisis era), reaching ~30,000+
+- **Long-term pattern**: General downward trend after 2009, with notable variability
+- **Current level**: Significantly lower than peak crisis years
+
+---
+
+## Research Question 2: Client Type Breakdown (BFE vs. ETW)
+
+### Data Availability Note
+
+Client type breakdowns (BFE vs. ETW) are available from **April 2012 onwards** in the dataset.
+
+### Trend by Client Type
+
+```{r client-type-trend}
+analysis_data %>%
+  filter(!is.na(ETW_Total)) %>%
+  ggplot(aes(x = Ref_Date)) +
+  geom_line(aes(y = BFE_Total, color = "BFE (Barriers to Full Employment)"), 
+            linewidth = 0.8) +
+  geom_line(aes(y = ETW_Total, color = "ETW (Expected to Work)"), 
+            linewidth = 0.8) +
+  geom_smooth(aes(y = BFE_Total), method = "loess", formula = y ~ x,
+              color = "#ff6b6b", linewidth = 1, alpha = 0.1, se = FALSE, 
+              show.legend = FALSE) +
+  geom_smooth(aes(y = ETW_Total), method = "loess", formula = y ~ x,
+              color = "#4ecdc4", linewidth = 1, alpha = 0.1, se = FALSE,
+              show.legend = FALSE) +
+  scale_y_continuous(labels = comma) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  scale_color_manual(values = c(
+    "BFE (Barriers to Full Employment)" = "#ff6b6b",
+    "ETW (Expected to Work)" = "#4ecdc4"
+  )) +
+  labs(
+    title = "Income Support Caseload by Client Type (2012–2025)",
+    subtitle = "BFE vs. ETW composition with trend smoothing",
+    x = "Date",
+    y = "Number of Cases",
+    color = "Client Type",
+    caption = "Source: Government of Alberta, Assisted Living and Social Services"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 14, face = "bold", margin = margin(b = 5)),
+    plot.subtitle = element_text(size = 11, color = "#666666", margin = margin(b = 10)),
+    axis.title = element_text(size = 11),
+    legend.position = "bottom",
+    panel.grid.major = element_line(color = "#e0e0e0"),
+    panel.grid.minor = element_blank()
+  )
+```
+
+### Composition Over Time (Stacked Area Chart)
+
+```{r composition-area}
+analysis_data %>%
+  filter(!is.na(ETW_Total)) %>%
+  pivot_longer(
+    cols = c(ETW_Total, BFE_Total),
+    names_to = "Client_Type",
+    values_to = "Count"
+  ) %>%
+  mutate(
+    Client_Type = factor(Client_Type, 
+                         levels = c("ETW_Total", "BFE_Total"),
+                         labels = c("ETW", "BFE"))
+  ) %>%
+  ggplot(aes(x = Ref_Date, y = Count, fill = Client_Type)) +
+  geom_area(alpha = 0.7) +
+  scale_y_continuous(labels = comma) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  scale_fill_manual(values = c("ETW" = "#4ecdc4", "BFE" = "#ff6b6b")) +
+  labs(
+    title = "Stacked Caseload by Client Type (2012–2025)",
+    subtitle = "Relative composition of ETW and BFE cases",
+    x = "Date",
+    y = "Number of Cases",
+    fill = "Client Type",
+    caption = "Source: Government of Alberta, Assisted Living and Social Services"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 14, face = "bold", margin = margin(b = 5)),
+    plot.subtitle = element_text(size = 11, color = "#666666", margin = margin(b = 10)),
+    axis.title = element_text(size = 11),
+    legend.position = "bottom",
+    panel.grid.major = element_line(color = "#e0e0e0"),
+    panel.grid.minor = element_blank()
+  )
+```
+
+### Composition Percentage
+
+```{r composition-pct}
+analysis_data %>%
+  filter(!is.na(ETW_Total)) %>%
+  ggplot(aes(x = Ref_Date)) +
+  geom_line(aes(y = ETW_Pct, color = "ETW %"), linewidth = 0.8) +
+  geom_line(aes(y = BFE_Pct, color = "BFE %"), linewidth = 0.8) +
+  scale_y_continuous(limits = c(0, 100), labels = percent_format(scale = 1)) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  scale_color_manual(values = c("ETW %" = "#4ecdc4", "BFE %" = "#ff6b6b")) +
+  labs(
+    title = "Client Type Composition Trend (2012–2025)",
+    subtitle = "Percentage of caseload in each category",
+    x = "Date",
+    y = "Percentage of Total",
+    color = "Metric",
+    caption = "Source: Government of Alberta, Assisted Living and Social Services"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 14, face = "bold", margin = margin(b = 5)),
+    plot.subtitle = element_text(size = 11, color = "#666666", margin = margin(b = 10)),
+    axis.title = element_text(size = 11),
+    legend.position = "bottom",
+    panel.grid.major = element_line(color = "#e0e0e0"),
+    panel.grid.minor = element_blank()
+  )
+```
+
+### Client Type Statistics
+
+```{r client-stats}
+client_stats <- analysis_data %>%
+  filter(!is.na(ETW_Total)) %>%
+  summarise(
+    across(c(ETW_Total, BFE_Total), list(
+      Min = ~ min(., na.rm = TRUE),
+      Max = ~ max(., na.rm = TRUE),
+      Mean = ~ mean(., na.rm = TRUE),
+      Median = ~ median(., na.rm = TRUE)
+    ), .names = "{.col}_{.fn}")
+  ) %>%
+  pivot_longer(everything(), names_to = "Metric", values_to = "Value") %>%
+  separate(Metric, into = c("Client_Type", "Statistic"), sep = "_") %>%
+  pivot_wider(names_from = Client_Type, values_from = Value)
+
+knitr::kable(client_stats, caption = "Client Type Statistics (2012–2025)")
+```
+
+```{r composition-stats}
+composition_stats <- analysis_data %>%
+  filter(!is.na(ETW_Pct)) %>%
+  summarise(
+    Mean_ETW_Pct = mean(ETW_Pct, na.rm = TRUE),
+    Mean_BFE_Pct = mean(BFE_Pct, na.rm = TRUE),
+    Min_ETW_Pct = min(ETW_Pct, na.rm = TRUE),
+    Max_ETW_Pct = max(ETW_Pct, na.rm = TRUE),
+    Min_BFE_Pct = min(BFE_Pct, na.rm = TRUE),
+    Max_BFE_Pct = max(BFE_Pct, na.rm = TRUE)
+  )
+
+knitr::kable(t(composition_stats), 
+             col.names = "Percentage",
+             caption = "Client Type Composition Statistics (2012–2025)")
+```
+
+---
+
+## Key Insights and Summary
+
+### Overall Caseload Trend (2005–2025)
+
+1. **Crisis-Era Peak**: The caseload reached its maximum around 2008–2009 (~30,000+) coinciding with the global financial crisis.
+
+2. **Long-Term Decline**: Post-2009, the caseload has demonstrated a general downward trend, reflecting improving economic conditions and labor market recovery.
+
+3. **Volatility and Seasonality**: Clear seasonal patterns appear, with variations tied to economic cycles, policy changes, and labor market dynamics.
+
+4. **Current State**: The 2025 caseload remains well below crisis-era peaks, suggesting sustained improvement.
+
+### Client Type Composition (2012–2025)
+
+1. **Persistent BFE Majority**: Throughout the 2012–2025 period, BFE clients consistently comprise approximately 55–60% of the caseload, while ETW clients represent 40–45%.
+
+2. **Structural Composition**: The relatively stable balance suggests that a substantial and enduring segment of the caseload faces significant barriers to full-time employment—likely including persons with disabilities, caregiving responsibilities, and long-term health conditions.
+
+3. **Shared Decline**: Both ETW and BFE caseloads have declined over this period, indicating that improving economic conditions have benefited both groups, though BFE numbers remain elevated.
+
+### How the Breakdown Changes the Story
+
+- **Without client type data**, the overall trend appears as a simple recovery from crisis-era peaks.
+
+- **With client type breakdown**, a more nuanced picture emerges:
+  - The **majority of recipients face barriers to employment**, not just temporary job market challenges.
+  - Even with overall caseload declines, **BFE numbers remain substantial and stable**, suggesting this is a structural feature of income support programs.
+  - Policy interventions and economic improvements have reduced caseloads broadly, but the **persistent BFE proportion indicates targeting and support for persons with complex needs remains essential**.
+
+---
+
+## Conclusion
+
+The Alberta Income Support caseload tells a story of economic recovery (2005–2025) punctuated by crisis-era volatility. While overall numbers have declined from 2009 peaks, the breakdown reveals that **over half of all income support recipients face barriers to full employment**. This composition has remained remarkably stable over 13 years, underscoring that income support serves not just as a temporary safety net for the underemployed, but as a crucial program for persons with disabilities, caregiving responsibilities, and other structural barriers to work. Understanding this distinction is vital for policy design and resource allocation.

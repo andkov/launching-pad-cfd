@@ -1,0 +1,112 @@
+---
+title: "Historic Trends in Alberta Income Support Caseloads"
+author: "GPT-4.1 Starter 26 Solution"
+date: "2026-04-15"
+format:
+  html:
+    toc: true
+    code-fold: true
+    theme: cosmo
+---
+
+# Introduction
+
+This dynamic document analyzes the historic trend of Alberta's Income Support caseload, using the official aggregated data. It further explores how the story changes when breaking down the caseload by client type: **Barriers to Full Employment (BFE)** and **Expected to Work (ETW)**.
+
+## Data Source
+
+- [Alberta Open Government: Income Support Caseload](https://open.alberta.ca/opendata/income-support-aggregated-caseload-data)
+- Local file: `data-public/raw/is-aggregated-data-april-2005-sep-2025.csv`
+
+# Setup
+
+```{r}
+library(tidyverse)
+library(lubridate)
+```
+
+# Data Ingestion
+
+```{r}
+# Read the CSV, skipping the first row (title row)
+data_raw <- read_csv(
+  "../../data-public/raw/is-aggregated-data-april-2005-sep-2025.csv",
+  skip = 1,
+  col_types = cols(.default = "c")
+)
+
+# Clean column names
+names(data_raw) <- make.names(names(data_raw))
+
+data <- data_raw %>%
+  select(Ref_Date, Geography, Measure.Type, Measure, Value) %>%
+  filter(!is.na(Ref_Date), !is.na(Value))
+```
+
+# Data Preparation
+
+```{r}
+# Convert columns to appropriate types
+data <- data %>%
+  mutate(
+    Ref_Date = my(Ref_Date),
+    Value = as.numeric(Value),
+    Measure.Type = as.factor(Measure.Type),
+    Measure = as.factor(Measure)
+  )
+
+# Filter for Alberta only (should be all rows)
+data <- data %>% filter(Geography == "Alberta")
+```
+
+# Historic Trend: Total Caseload
+
+```{r}
+total_caseload <- data %>%
+  filter(Measure == "Caseload") %>%
+  group_by(Ref_Date) %>%
+  summarise(Total = sum(Value, na.rm = TRUE))
+
+ggplot(total_caseload, aes(x = Ref_Date, y = Total)) +
+  geom_line(color = "#0072B2", size = 1) +
+  labs(
+    title = "Total Income Support Caseload Over Time",
+    x = "Month",
+    y = "Caseload"
+  ) +
+  theme_minimal()
+```
+
+# Caseload by Client Type: BFE vs ETW
+
+```{r}
+caseload_by_type <- data %>%
+  filter(Measure == "Caseload", Measure.Type %in% c("BFE", "ETW")) %>%
+  group_by(Ref_Date, Measure.Type) %>%
+  summarise(Caseload = sum(Value, na.rm = TRUE))
+
+ggplot(caseload_by_type, aes(x = Ref_Date, y = Caseload, color = Measure.Type)) +
+  geom_line(size = 1) +
+  labs(
+    title = "Income Support Caseload by Client Type (BFE vs ETW)",
+    x = "Month",
+    y = "Caseload",
+    color = "Client Type"
+  ) +
+  scale_color_manual(values = c("BFE" = "#D55E00", "ETW" = "#009E73")) +
+  theme_minimal()
+```
+
+# Discussion
+
+The first plot shows the overall trend in Income Support caseloads in Alberta. The second plot breaks down the caseload by client type:
+
+- **BFE (Barriers to Full Employment):** Clients with significant, often long-term, barriers to employment.
+- **ETW (Expected to Work):** Clients assessed as able to participate in employment activities.
+
+This breakdown reveals how the composition of the caseload has changed over time, providing insight into shifts in the client population and policy impacts.
+
+# References
+
+- [Open Government Licence – Alberta](https://open.alberta.ca/licence)
+- [INPUT-manifest.md](../../INPUT-manifest.md)

@@ -1,0 +1,53 @@
+---
+title: "Income Support Caseload Analysis"
+format: html
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(lubridate)
+
+# Load the data
+data <- read_csv("../../is-aggregated-data-april-2005-sep-2025.csv")
+
+# Preprocess the data
+data <- data %>%
+  mutate(Date = ymd(Date))
+```
+
+## Historic Trend of Income Support Caseload
+
+```{r trend}
+# Aggregate caseload over time
+trend_data <- data %>%
+  group_by(Date) %>%
+  summarise(TotalCaseload = sum(Caseload, na.rm = TRUE))
+
+# Plot the trend
+ggplot(trend_data, aes(x = Date, y = TotalCaseload)) +
+  geom_line() +
+  labs(title = "Historic Trend of Income Support Caseload",
+       x = "Date",
+       y = "Total Caseload")
+```
+
+## Breakdown by BFE and ETW
+
+```{r breakdown}
+# Aggregate caseload by BFE and ETW
+breakdown_data <- data %>%
+  group_by(Date, Category) %>%
+  summarise(TotalCaseload = sum(Caseload, na.rm = TRUE))
+
+# Plot the breakdown
+ggplot(breakdown_data, aes(x = Date, y = TotalCaseload, color = Category)) +
+  geom_line() +
+  labs(title = "Caseload Breakdown by BFE and ETW",
+       x = "Date",
+       y = "Total Caseload",
+       color = "Category")
+```
+
+## Conclusion
+
+The analysis highlights the overall trend in Income Support caseload and provides insights into how the breakdown by BFE and ETW categories changes the narrative.

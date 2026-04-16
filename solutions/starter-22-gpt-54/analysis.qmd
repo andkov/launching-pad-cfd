@@ -1,0 +1,348 @@
+---
+title: "Historic Trend of Alberta Income Support Caseload"
+subtitle: "How the BFE and ETW breakdown changes the story"
+format:
+  html:
+    toc: true
+    toc-depth: 2
+    theme: flatly
+    number-sections: true
+    code-fold: show
+    embed-resources: true
+execute:
+  echo: true
+  warning: false
+  message: false
+---
+
+## Research Question
+
+What is the historic trend of Income Support caseload? How does breaking it down by BFE and ETW change the story?
+
+## Approach
+
+This document reads the raw Alberta Income Support CSV directly and builds two related views of caseload:
+
+1. A full-history headline series from April 2005 to September 2025.
+2. A client-type breakdown from April 2012 onward, when the source begins reporting BFE and ETW categories.
+
+The source changes structure in April 2012. Before that point, the file reports `Total Caseload`. Starting in April 2012, it reports `Client Caseload Total` alongside BFE and ETW components. To preserve the long-run history, the analysis stitches those two headline series together and clearly marks the handoff.
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(readr)
+library(scales)
+library(stringr)
+library(tidyr)
+
+data_path <- "../../is-aggregated-data-april-2005-sep-2025.csv"
+
+raw_data <- read_csv(
+  data_path,
+  skip = 1,
+  show_col_types = FALSE,
+  name_repair = "minimal"
+)
+
+names(raw_data)[1:5] <- c(
+  "ref_date",
+  "geography",
+  "measure_type",
+  "measure",
+  "value"
+)
+
+caseload_data <- raw_data |>
+  select(ref_date, geography, measure_type, measure, value) |>
+  filter(!is.na(ref_date), ref_date != "Ref_Date") |>
+  mutate(
+    across(c(ref_date, geography, measure_type, measure), ~ str_trim(as.character(.x))),
+    date = as.Date(paste0("01-", ref_date), format = "%d-%y-%b"),
+    value = suppressWarnings(parse_number(value))
+  ) |>
+  arrange(date, measure_type, measure)
+
+legacy_total <- caseload_data |>
+  filter(measure == "Total Caseload") |>
+  transmute(date, caseload = value, source_series = "Legacy total caseload")
+
+client_level <- caseload_data |>
+  filter(measure_type == "Client Type Level")
+
+client_total <- client_level |>
+  filter(measure == "Client Caseload Total") |>
+  transmute(date, caseload = value, source_series = "Client caseload total")
+
+headline_series <- bind_rows(legacy_total, client_total) |>
+  arrange(date)
+
+breakdown <- client_total |>
+  left_join(
+    client_level |>
+      filter(measure == "BFE - Total") |>
+      select(date, bfe_total = value),
+    by = "date"
+  ) |>
+  left_join(
+    client_level |>
+      filter(str_detect(measure, "^ETW")) |>
+      group_by(date) |>
+      summarise(etw_total = sum(value, na.rm = TRUE), .groups = "drop"),
+    by = "date"
+  ) |>
+  mutate(
+    bfe_share = bfe_total / caseload,
+    etw_share = etw_total / caseload
+  )
+
+etw_components <- client_level |>
+  filter(str_detect(measure, "^ETW")) |>
+  mutate(
+    component = case_when(
+      measure == "ETW - Not Working (Available for Work) Total" ~ "ETW Not Working, Available",
+      measure == "ETW - Not Working (Unavailable for Work) Total" ~ "ETW Not Working, Unavailable",
+      measure == "ETW - Working Total" ~ "ETW Working",
+      TRUE ~ measure
+    ),
+    component = factor(
+      component,
+      levels = c(
+        "ETW Not Working, Available",
+        "ETW Not Working, Unavailable",
+        "ETW Working"
+      )
+    )
+  ) |>
+  select(date, component, value)
+
+transition_date <- min(client_total$date)
+
+headline_start <- first(headline_series$caseload)
+headline_end <- last(headline_series$caseload)
+headline_peak_row <- slice_max(headline_series, caseload, n = 1, with_ties = FALSE)
+headline_trough_row <- slice_min(headline_series, caseload, n = 1, with_ties = FALSE)
+
+breakdown_start_row <- slice_head(breakdown, n = 1)
+breakdown_end_row <- slice_tail(breakdown, n = 1)
+
+component_change <- etw_components |>
+  group_by(component) |>
+  summarise(
+    start_value = first(value),
+    end_value = last(value),
+    abs_change = end_value - start_value,
+    pct_change = end_value / start_value - 1,
+    .groups = "drop"
+  ) |>
+  arrange(desc(abs_change))
+
+summary_table <- tibble(
+  metric = c(
+    "Full-history start",
+    "Full-history latest",
+    "Historic peak",
+    "Historic trough",
+    "Breakdown begins",
+    "Latest BFE share",
+    "Latest ETW share"
+  ),
+  value = c(
+    paste0(comma(headline_start), " (", format(min(headline_series$date), "%b %Y"), ")"),
+    paste0(comma(headline_end), " (", format(max(headline_series$date), "%b %Y"), ")"),
+    paste0(comma(headline_peak_row$caseload), " (", format(headline_peak_row$date, "%b %Y"), ")"),
+    paste0(comma(headline_trough_row$caseload), " (", format(headline_trough_row$date, "%b %Y"), ")"),
+    format(transition_date, "%b %Y"),
+    percent(breakdown_end_row$bfe_share, accuracy = 0.1),
+    percent(breakdown_end_row$etw_share, accuracy = 0.1)
+  )
+)
+```
+
+## Headline Trend
+
+Using the stitched headline series, caseload rises from `r comma(headline_start)` in `r format(min(headline_series$date), "%b %Y")` to `r comma(headline_end)` in `r format(max(headline_series$date), "%b %Y")`. The long-run series first falls to a trough of `r comma(headline_trough_row$caseload)` in `r format(headline_trough_row$date, "%b %Y")`, then climbs for most of the following decade and reaches a historic peak of `r comma(headline_peak_row$caseload)` in `r format(headline_peak_row$date, "%b %Y")`.
+
+That arc suggests a clear structural change: the program moved from a lower-caseload period in the mid-2000s to a much larger caseload environment by the late 2010s and early 2020s. The latest value remains far above the starting level even after receding somewhat from the 2020 high.
+
+```{r}
+ggplot(headline_series, aes(x = date, y = caseload)) +
+  geom_line(linewidth = 0.8, color = "#0f4c5c") +
+  geom_vline(xintercept = transition_date, color = "#bc6c25", linetype = "22") +
+  annotate(
+    "label",
+    x = transition_date,
+    y = max(headline_series$caseload) * 0.76,
+    label = paste(
+      "Source switches to client-type reporting in",
+      format(transition_date, "%b %Y")
+    ),
+    fill = "white",
+    label.size = 0.2,
+    size = 3.2
+  ) +
+  scale_y_continuous(labels = label_comma()) +
+  scale_x_date(date_breaks = "2 years", date_labels = "%Y") +
+  labs(
+    title = "Income Support caseload increased sharply over the full period",
+    subtitle = "Legacy total caseload runs through Mar 2012; client caseload total continues the series from Apr 2012 onward.",
+    x = NULL,
+    y = "Caseload"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    panel.grid.minor = element_blank(),
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+```
+
+```{r}
+knitr::kable(summary_table, col.names = c("Metric", "Value"))
+```
+
+## What Changes When The Series Is Split By Client Type?
+
+The split materially changes the interpretation. Once the BFE and ETW categories become available in `r format(transition_date, "%b %Y")`, the growth story is not evenly shared across both client groups.
+
+From the start of the breakdown window to the latest month:
+
+- BFE moves from `r comma(breakdown_start_row$bfe_total)` to `r comma(breakdown_end_row$bfe_total)`.
+- ETW moves from `r comma(breakdown_start_row$etw_total)` to `r comma(breakdown_end_row$etw_total)`.
+- BFE's share of caseload falls from `r percent(breakdown_start_row$bfe_share, accuracy = 0.1)` to `r percent(breakdown_end_row$bfe_share, accuracy = 0.1)`.
+- ETW's share rises from `r percent(breakdown_start_row$etw_share, accuracy = 0.1)` to `r percent(breakdown_end_row$etw_share, accuracy = 0.1)`.
+
+So the decomposition changes the story from "caseload is rising" to "caseload growth is increasingly ETW-led." BFE remains a large and policy-relevant population, but it does not drive the later expansion to the same degree.
+
+```{r}
+breakdown_long <- breakdown |>
+  select(date, bfe_total, etw_total) |>
+  pivot_longer(-date, names_to = "client_group", values_to = "caseload") |>
+  mutate(
+    client_group = recode(
+      client_group,
+      bfe_total = "BFE",
+      etw_total = "ETW"
+    )
+  )
+
+ggplot(breakdown_long, aes(x = date, y = caseload, fill = client_group)) +
+  geom_area(alpha = 0.9, color = "white", linewidth = 0.2) +
+  scale_fill_manual(values = c("BFE" = "#6c584c", "ETW" = "#adc178")) +
+  scale_y_continuous(labels = label_comma()) +
+  scale_x_date(date_breaks = "2 years", date_labels = "%Y") +
+  labs(
+    title = "Post-2012 caseload growth is dominated by ETW",
+    subtitle = "BFE remains substantial, but ETW accounts for a rising share of the total.",
+    x = NULL,
+    y = "Caseload",
+    fill = NULL
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    panel.grid.minor = element_blank(),
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "top"
+  )
+```
+
+```{r}
+share_long <- breakdown |>
+  select(date, bfe_share, etw_share) |>
+  pivot_longer(-date, names_to = "client_group", values_to = "share") |>
+  mutate(
+    client_group = recode(
+      client_group,
+      bfe_share = "BFE share",
+      etw_share = "ETW share"
+    )
+  )
+
+ggplot(share_long, aes(x = date, y = share, color = client_group)) +
+  geom_line(linewidth = 0.9) +
+  scale_color_manual(values = c("BFE share" = "#6c584c", "ETW share" = "#3a7d44")) +
+  scale_y_continuous(labels = label_percent(accuracy = 1)) +
+  scale_x_date(date_breaks = "2 years", date_labels = "%Y") +
+  labs(
+    title = "The composition shifts steadily toward ETW",
+    subtitle = "ETW grows from just over half of caseload in 2012 to roughly seven in ten cases by 2025.",
+    x = NULL,
+    y = "Share of caseload",
+    color = NULL
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    panel.grid.minor = element_blank(),
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "top"
+  )
+```
+
+## Inside ETW
+
+The ETW growth is not coming from currently working clients. The largest increase is in the subgroup recorded as not working but available for work.
+
+```{r}
+component_change |>
+  mutate(
+    start_value = comma(start_value),
+    end_value = comma(end_value),
+    abs_change = comma(abs_change),
+    pct_change = percent(pct_change, accuracy = 0.1)
+  ) |>
+  knitr::kable(
+    col.names = c(
+      "ETW component",
+      "Start value",
+      "Latest value",
+      "Absolute change",
+      "Percent change"
+    )
+  )
+```
+
+The most important internal shifts are:
+
+- ETW not working and available for work rises by `r comma(component_change$abs_change[component_change$component == "ETW Not Working, Available"])` cases.
+- ETW not working and unavailable for work rises by `r comma(component_change$abs_change[component_change$component == "ETW Not Working, Unavailable"])` cases.
+- ETW working falls by `r comma(abs(component_change$abs_change[component_change$component == "ETW Working"]))` cases.
+
+That means the ETW expansion is mainly a story about more clients attached to the employment-oriented stream but not currently working, especially those classified as available for work.
+
+```{r}
+ggplot(etw_components, aes(x = date, y = value, color = component)) +
+  geom_line(linewidth = 0.9) +
+  scale_color_manual(
+    values = c(
+      "ETW Not Working, Available" = "#588157",
+      "ETW Not Working, Unavailable" = "#a3b18a",
+      "ETW Working" = "#344e41"
+    )
+  ) +
+  scale_y_continuous(labels = label_comma()) +
+  scale_x_date(date_breaks = "2 years", date_labels = "%Y") +
+  labs(
+    title = "ETW growth is concentrated among clients who are not currently working",
+    subtitle = "The available-for-work ETW subgroup drives most of the increase after 2012.",
+    x = NULL,
+    y = "Caseload",
+    color = NULL
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    panel.grid.minor = element_blank(),
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "top"
+  )
+```
+
+## Conclusion
+
+The historic trend is upward overall: Alberta Income Support caseload more than doubles between 2005 and 2025, with the highest levels appearing around 2020 and remaining elevated afterward.
+
+Breaking the trend into BFE and ETW changes the story in an important way. The rise is not balanced across both groups. BFE grows in absolute terms early in the breakdown period but becomes a smaller share of total caseload over time. ETW becomes the dominant driver of growth, and within ETW the strongest expansion occurs among clients who are not working, especially those listed as available for work.
+
+## Notes And Limitations
+
+- The raw file has a two-row header and several trailing empty columns; the import step trims that structure away.
+- Six rows elsewhere in the file use `-` as a placeholder rather than a number, but those gaps occur in region and gender measures, not in the headline or client-type series used here.
+- The BFE and ETW breakdown is only available from April 2012 onward, so any client-type interpretation before that date would be unsupported by this source.

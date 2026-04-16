@@ -1,0 +1,727 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Alberta Income Support — Launching Pad CFD v2</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #f4f6f9;
+      --surface: #ffffff;
+      --border: #d1d9e0;
+      --text: #1c2526;
+      --text-muted: #586069;
+      --accent: #0969da;
+      --accent-hover: #0550ae;
+      --tag-r: #e8f4e8;
+      --tag-r-text: #1a6b2c;
+      --tag-py: #fff3cd;
+      --tag-py-text: #7c5c00;
+      --tag-js: #ddeeff;
+      --tag-js-text: #0550ae;
+      --tag-qmd: #f0e8ff;
+      --tag-qmd-text: #5a1fa8;
+      --tag-fail: #fde8e8;
+      --tag-fail-text: #b91c1c;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      min-height: 100vh;
+    }
+
+    /* ── Top bar ─────────────────────────────────────────────── */
+    header {
+      background: #24292f;
+      color: #f0f6fc;
+      padding: 0 2rem;
+    }
+    .header-inner {
+      max-width: 1100px;
+      margin: 0 auto;
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      height: 60px;
+    }
+    .header-logo {
+      font-size: 1.1rem;
+      font-weight: 700;
+      color: #f0f6fc;
+      text-decoration: none;
+      letter-spacing: -0.3px;
+    }
+    .header-logo span { color: #58a6ff; }
+    nav { margin-left: auto; display: flex; gap: 1.25rem; }
+    nav a {
+      color: #adbac7;
+      text-decoration: none;
+      font-size: 0.88rem;
+      transition: color 0.15s;
+    }
+    nav a:hover { color: #f0f6fc; }
+
+    /* ── Hero ─────────────────────────────────────────────────── */
+    .hero {
+      background: linear-gradient(135deg, #0d1117 0%, #161b22 60%, #1f2937 100%);
+      color: #e6edf3;
+      padding: 4rem 2rem 3.5rem;
+      border-bottom: 1px solid #30363d;
+    }
+    .hero-inner {
+      max-width: 1100px;
+      margin: 0 auto;
+    }
+    .hero-eyebrow {
+      font-size: 0.78rem;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: #58a6ff;
+      margin-bottom: 0.75rem;
+    }
+    .hero h1 {
+      font-size: clamp(1.75rem, 4vw, 2.75rem);
+      font-weight: 700;
+      line-height: 1.2;
+      margin-bottom: 1rem;
+      color: #f0f6fc;
+    }
+    .hero p {
+      max-width: 700px;
+      color: #8b949e;
+      font-size: 1rem;
+      line-height: 1.7;
+    }
+    .hero-meta {
+      margin-top: 1.5rem;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+      font-size: 0.82rem;
+      color: #8b949e;
+    }
+    .hero-meta span { display: flex; align-items: center; gap: 0.35rem; }
+
+    /* ── Main layout ──────────────────────────────────────────── */
+    main {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 2.5rem 2rem 4rem;
+      display: grid;
+      grid-template-columns: 1fr 320px;
+      gap: 2.5rem;
+      align-items: start;
+    }
+    @media (max-width: 800px) {
+      main { grid-template-columns: 1fr; }
+      .sidebar { order: -1; }
+    }
+
+    /* ── Section headings ─────────────────────────────────────── */
+    .section-label {
+      font-size: 0.72rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--text-muted);
+      margin-bottom: 0.85rem;
+      padding-bottom: 0.5rem;
+      border-bottom: 2px solid var(--border);
+    }
+
+    /* ── Analysis cards ───────────────────────────────────────── */
+    .cards { display: flex; flex-direction: column; gap: 1rem; margin-bottom: 2.5rem; }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1.25rem 1.5rem;
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      gap: 0 1rem;
+      align-items: start;
+      transition: border-color 0.15s, box-shadow 0.15s;
+      text-decoration: none;
+      color: inherit;
+    }
+    .card:hover {
+      border-color: var(--accent);
+      box-shadow: 0 2px 8px rgba(9,105,218,0.1);
+    }
+
+    .card-number {
+      width: 36px; height: 36px;
+      background: #0d1117;
+      color: #58a6ff;
+      border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 0.85rem;
+      font-weight: 700;
+      flex-shrink: 0;
+      margin-top: 2px;
+    }
+
+    .card-body { min-width: 0; }
+    .card-title {
+      font-size: 1rem;
+      font-weight: 600;
+      color: var(--accent);
+      margin-bottom: 0.3rem;
+    }
+    .card:hover .card-title { color: var(--accent-hover); }
+    .card-desc {
+      font-size: 0.88rem;
+      color: var(--text-muted);
+      line-height: 1.5;
+      margin-bottom: 0.6rem;
+    }
+    .tags { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+    .tag {
+      display: inline-block;
+      font-size: 0.72rem;
+      font-weight: 600;
+      padding: 0.18em 0.55em;
+      border-radius: 20px;
+    }
+    .tag-r    { background: var(--tag-r);    color: var(--tag-r-text); }
+    .tag-py   { background: var(--tag-py);   color: var(--tag-py-text); }
+    .tag-js   { background: var(--tag-js);   color: var(--tag-js-text); }
+    .tag-qmd  { background: var(--tag-qmd);  color: var(--tag-qmd-text); }
+    .tag-fail { background: var(--tag-fail); color: var(--tag-fail-text); }
+
+    .card-arrow {
+      color: var(--text-muted);
+      font-size: 1.2rem;
+      margin-top: 6px;
+      flex-shrink: 0;
+      transition: transform 0.15s;
+    }
+    .card:hover .card-arrow { transform: translateX(3px); color: var(--accent); }
+
+    /* ── Prompt sequence section ──────────────────────────────── */
+    .prose-section {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1.5rem 1.75rem;
+      margin-bottom: 2.5rem;
+    }
+    .prose-section h2 {
+      font-size: 1.05rem;
+      font-weight: 700;
+      margin-bottom: 1rem;
+      color: var(--text);
+    }
+    .prose-section h3 {
+      font-size: 0.92rem;
+      font-weight: 700;
+      color: var(--text);
+      margin: 1.25rem 0 0.4rem;
+    }
+    .prose-section p {
+      font-size: 0.9rem;
+      color: var(--text-muted);
+      line-height: 1.65;
+      margin-bottom: 0.6rem;
+    }
+    .prose-section blockquote {
+      border-left: 3px solid var(--border);
+      padding-left: 0.85rem;
+      color: var(--text-muted);
+      font-size: 0.85rem;
+      font-style: italic;
+      margin: 0.5rem 0;
+    }
+    .prose-section code {
+      background: #f6f8fa;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 0.1em 0.35em;
+      font-size: 0.82em;
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    }
+
+    /* ── Sidebar ──────────────────────────────────────────────── */
+    .sidebar { display: flex; flex-direction: column; gap: 1.25rem; }
+
+    .sidebar-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1.25rem 1.5rem;
+    }
+    .sidebar-card h3 {
+      font-size: 0.82rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--text-muted);
+      margin-bottom: 0.85rem;
+      padding-bottom: 0.5rem;
+      border-bottom: 1px solid var(--border);
+    }
+    .meta-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+    .meta-table tr + tr td { border-top: 1px solid #f0f2f4; }
+    .meta-table td { padding: 0.35rem 0; vertical-align: top; }
+    .meta-table td:first-child {
+      font-weight: 600;
+      color: var(--text-muted);
+      padding-right: 0.75rem;
+      white-space: nowrap;
+      width: 42%;
+    }
+    .meta-table a { color: var(--accent); text-decoration: none; }
+    .meta-table a:hover { text-decoration: underline; }
+
+    .def-list { list-style: none; display: flex; flex-direction: column; gap: 0.75rem; }
+    .def-list li { font-size: 0.84rem; line-height: 1.5; }
+    .def-term { font-weight: 700; color: var(--text); }
+    .def-body { color: var(--text-muted); font-size: 0.82rem; margin-top: 0.15rem; }
+
+    .raw-format { font-size: 0.82rem; line-height: 1.55; color: var(--text-muted); }
+    .raw-format li { margin-bottom: 0.45rem; }
+    .raw-format ul { padding-left: 1rem; margin-top: 0.35rem; }
+    .raw-format code {
+      background: #f6f8fa;
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      padding: 0.1em 0.3em;
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 0.88em;
+    }
+
+    /* ── Model comparison table ───────────────────────────────── */
+    .model-table-wrap {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1.25rem 1.5rem;
+    }
+    .model-table-wrap h3 {
+      font-size: 0.82rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--text-muted);
+      margin-bottom: 0.85rem;
+      padding-bottom: 0.5rem;
+      border-bottom: 1px solid var(--border);
+    }
+    .model-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.82rem;
+    }
+    .model-table th {
+      text-align: left;
+      font-weight: 600;
+      color: var(--text-muted);
+      padding: 0.4rem 0.5rem;
+      border-bottom: 2px solid var(--border);
+    }
+    .model-table td {
+      padding: 0.4rem 0.5rem;
+      border-bottom: 1px solid #f0f2f4;
+      vertical-align: top;
+    }
+    .model-table tr:hover { background: #f8fafc; }
+    .status-ok { color: #1a6b2c; font-weight: 600; }
+    .status-fail { color: #b91c1c; font-weight: 600; }
+
+    /* ── footer ──────────────────────────────────────────────── */
+    footer {
+      background: #24292f;
+      color: #8b949e;
+      padding: 1.5rem 2rem;
+      font-size: 0.8rem;
+      text-align: center;
+      border-top: 1px solid #30363d;
+    }
+    footer a { color: #58a6ff; text-decoration: none; }
+    footer a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+
+<!-- ── Header ──────────────────────────────────────────────────── -->
+<header>
+  <div class="header-inner">
+    <a class="header-logo" href="index.html">Launching Pad <span>CFD</span></a>
+    <nav>
+      <a href="#baseline">Baseline</a>
+      <a href="#comparison">Model Comparison</a>
+      <a href="#prompts">Prompts</a>
+      <a href="#data">Data</a>
+    </nav>
+  </div>
+</header>
+
+<!-- ── Hero ────────────────────────────────────────────────────── -->
+<div class="hero">
+  <div class="hero-inner">
+    <div class="hero-eyebrow">Alberta ALSS · Income Support</div>
+    <h1>Historic Income Support<br>Caseload Trends</h1>
+    <p>
+      A collection of analyses exploring twenty years of Alberta Income Support caseload data,
+      comparing Expected to Work (ETW) and Barriers to Full Employment (BFE) client populations.
+      Each analysis was produced by GitHub Copilot using the same prompt across different models
+      and prompting strategies to evaluate AI-assisted data analysis.
+    </p>
+    <div class="hero-meta">
+      <span>&#128197; April 2005 – September 2025</span>
+      <span>&#128202; 3,722 data rows</span>
+      <span>&#127968; Province of Alberta</span>
+      <span>&#128196; 12 analysis approaches</span>
+      <span>&#129302; 8 AI models</span>
+    </div>
+  </div>
+</div>
+
+<!-- ── Main content ─────────────────────────────────────────────── -->
+<main>
+
+  <!-- Left column -->
+  <div>
+
+    <!-- ── Baseline analyses (starters 1-4, Sonnet 4.6) ──────── -->
+    <div id="baseline">
+      <div class="section-label">Baseline analyses — Claude Sonnet 4.6</div>
+      <div class="cards">
+
+        <a class="card" href="starter-1.html" target="_blank">
+          <div class="card-number">1</div>
+          <div class="card-body">
+            <div class="card-title">Starter 1 — Dynamic Document</div>
+            <div class="card-desc">
+              A single self-contained HTML document with interactive Chart.js visualisations.
+              Produced by a direct "create a dynamic document" prompt, no source script retained.
+            </div>
+            <div class="tags">
+              <span class="tag tag-js">JavaScript</span>
+              <span class="tag tag-js">Chart.js</span>
+            </div>
+          </div>
+          <div class="card-arrow">→</div>
+        </a>
+
+        <a class="card" href="starter-2.html" target="_blank">
+          <div class="card-number">2</div>
+          <div class="card-body">
+            <div class="card-title">Starter 2 — Literate Script (R / Quarto)</div>
+            <div class="card-desc">
+              A Quarto document rendered from a literate R script (<code>.qmd</code>).
+              Inline code, narrative prose, and plots in one reproducible file.
+            </div>
+            <div class="tags">
+              <span class="tag tag-r">R</span>
+              <span class="tag tag-qmd">Quarto</span>
+            </div>
+          </div>
+          <div class="card-arrow">→</div>
+        </a>
+
+        <a class="card" href="starter-3.html" target="_blank">
+          <div class="card-number">3</div>
+          <div class="card-body">
+            <div class="card-title">Starter 3 — Literate Script (Python / Quarto)</div>
+            <div class="card-desc">
+              The same research questions answered in a Python-backed Quarto document.
+              Uses pandas for data wrangling and matplotlib / plotnine for visualisation.
+            </div>
+            <div class="tags">
+              <span class="tag tag-py">Python</span>
+              <span class="tag tag-qmd">Quarto</span>
+            </div>
+          </div>
+          <div class="card-arrow">→</div>
+        </a>
+
+        <a class="card" href="starter-4.html" target="_blank">
+          <div class="card-number">4</div>
+          <div class="card-body">
+            <div class="card-title">Starter 4 — Literate Pair (.R + .qmd)</div>
+            <div class="card-desc">
+              A two-file approach: a pure R script for data preparation and a separate
+              Quarto document for narrative and visualisation, linked at render time.
+            </div>
+            <div class="tags">
+              <span class="tag tag-r">R</span>
+              <span class="tag tag-qmd">Quarto</span>
+            </div>
+          </div>
+          <div class="card-arrow">→</div>
+        </a>
+
+      </div>
+    </div>
+
+    <!-- ── Model comparison analyses (starters 21-28) ─────────── -->
+    <div id="comparison">
+      <div class="section-label">Model comparison — Same prompt, different models</div>
+      <div class="cards">
+
+        <a class="card" href="starter-21.html" target="_blank">
+          <div class="card-number">21</div>
+          <div class="card-body">
+            <div class="card-title">GPT 5.3 Codex — Literate Script</div>
+            <div class="card-desc">
+              Quarto document produced by GPT 5.3 Codex using the standard "literate script" prompt.
+              Rendered successfully with R-based analysis.
+            </div>
+            <div class="tags">
+              <span class="tag tag-r">R</span>
+              <span class="tag tag-qmd">Quarto</span>
+            </div>
+          </div>
+          <div class="card-arrow">→</div>
+        </a>
+
+        <a class="card" href="starter-22.html" target="_blank">
+          <div class="card-number">22</div>
+          <div class="card-body">
+            <div class="card-title">GPT 5.4 — Literate Script</div>
+            <div class="card-desc">
+              Quarto document produced by GPT 5.4 using the standard "literate script" prompt.
+              Rendered successfully with R-based analysis.
+            </div>
+            <div class="tags">
+              <span class="tag tag-r">R</span>
+              <span class="tag tag-qmd">Quarto</span>
+            </div>
+          </div>
+          <div class="card-arrow">→</div>
+        </a>
+
+        <a class="card" href="starter-23.html" target="_blank">
+          <div class="card-number">23</div>
+          <div class="card-body">
+            <div class="card-title">Gemini 3.1 Pro — Literate Script</div>
+            <div class="card-desc">
+              Quarto document produced by Gemini 3.1 Pro using the standard "literate script" prompt.
+              Rendered successfully with R-based analysis.
+            </div>
+            <div class="tags">
+              <span class="tag tag-r">R</span>
+              <span class="tag tag-qmd">Quarto</span>
+            </div>
+          </div>
+          <div class="card-arrow">→</div>
+        </a>
+
+        <a class="card" href="starter-24.html" target="_blank">
+          <div class="card-number">24</div>
+          <div class="card-body">
+            <div class="card-title">Grok Code Fast 1 — Literate Script</div>
+            <div class="card-desc">
+              Quarto document produced by Grok Code Fast 1 using the standard "literate script" prompt.
+              Rendered successfully with R-based analysis.
+            </div>
+            <div class="tags">
+              <span class="tag tag-r">R</span>
+              <span class="tag tag-qmd">Quarto</span>
+            </div>
+          </div>
+          <div class="card-arrow">→</div>
+        </a>
+
+        <a class="card" href="starter-25.html" target="_blank">
+          <div class="card-number">25</div>
+          <div class="card-body">
+            <div class="card-title">GPT-4o — Literate Script ⚠️</div>
+            <div class="card-desc">
+              Quarto document produced by GPT-4o. <strong>Failed to render</strong> — the generated code
+              contained errors. Shown with code only (not executed) to illustrate the quality of the solution.
+            </div>
+            <div class="tags">
+              <span class="tag tag-r">R</span>
+              <span class="tag tag-qmd">Quarto</span>
+              <span class="tag tag-fail">render failed</span>
+            </div>
+          </div>
+          <div class="card-arrow">→</div>
+        </a>
+
+        <a class="card" href="starter-26.html" target="_blank">
+          <div class="card-number">26</div>
+          <div class="card-body">
+            <div class="card-title">GPT-4.1 — Literate Script ⚠️</div>
+            <div class="card-desc">
+              Quarto document produced by GPT-4.1. <strong>Failed to render</strong> — the generated code
+              contained errors. Shown with code only (not executed) to illustrate the quality of the solution.
+            </div>
+            <div class="tags">
+              <span class="tag tag-r">R</span>
+              <span class="tag tag-qmd">Quarto</span>
+              <span class="tag tag-fail">render failed</span>
+            </div>
+          </div>
+          <div class="card-arrow">→</div>
+        </a>
+
+        <a class="card" href="starter-27.html" target="_blank">
+          <div class="card-number">27</div>
+          <div class="card-body">
+            <div class="card-title">Claude Haiku 4.5 — Literate Script</div>
+            <div class="card-desc">
+              Quarto document produced by Claude Haiku 4.5 using the standard "literate script" prompt.
+              Rendered successfully with R-based analysis.
+            </div>
+            <div class="tags">
+              <span class="tag tag-r">R</span>
+              <span class="tag tag-qmd">Quarto</span>
+            </div>
+          </div>
+          <div class="card-arrow">→</div>
+        </a>
+
+        <a class="card" href="starter-28.html" target="_blank">
+          <div class="card-number">28</div>
+          <div class="card-body">
+            <div class="card-title">Claude Opus 4.6 — Literate Script</div>
+            <div class="card-desc">
+              Quarto document produced by Claude Opus 4.6 using the standard "literate script" prompt.
+              Rendered successfully with R-based analysis.
+            </div>
+            <div class="tags">
+              <span class="tag tag-r">R</span>
+              <span class="tag tag-qmd">Quarto</span>
+            </div>
+          </div>
+          <div class="card-arrow">→</div>
+        </a>
+
+      </div>
+    </div>
+
+    <!-- Prompt sequence -->
+    <div id="prompts">
+      <div class="section-label">Prompt sequence</div>
+      <div class="prose-section">
+        <h2>Sequence of prompts for exploration</h2>
+        <p>The following prompts were used to evaluate AI model behaviour and performance.</p>
+
+        <h3>Verbatim</h3>
+        <p>What is the historic trend of Income Support caseload? How does breaking it down by BFE and ETW change the story?</p>
+        <blockquote>This prompt typically returns text in the chat.</blockquote>
+
+        <h3>Starter 1 — Dynamic Document</h3>
+        <p>Create a dynamic document that responds to the following research questions about the provided data:</p>
+        <p><em>What is the historic trend of Income Support caseload? How does breaking it down by BFE and ETW change the story?</em></p>
+
+        <h3>Starter 2 — Literate Script (R)</h3>
+        <p>Create a literate script that produces a dynamic document …</p>
+        <p>Place solution in <code>./solutions/starter-2-sonnet-46/</code></p>
+
+        <h3>Starter 3 — Literate Script (Python)</h3>
+        <p>Create a literate script that produces a dynamic document …</p>
+        <p>Place solution in <code>./solutions/starter-3-sonnet-46/</code></p>
+
+        <h3>Starter 4 — Literate Pair</h3>
+        <p>Create a literate pair of <code>.R</code> + <code>.qmd</code> scripts …</p>
+        <p>Place solution in <code>./solutions/starter-4-sonnet-46/</code></p>
+
+        <h3>Starters 21–28 — Model Comparison</h3>
+        <p>The same "literate script" prompt was given to each model independently:</p>
+        <p><em>Create a literate script that produces a dynamic document that responds to the following research questions about the provided data:
+        What is the historic trend of Income Support caseload? How does breaking it down by BFE and ETW change the story?</em></p>
+        <p>Each model was instructed to ignore all other existing solutions to provide an uninfluenced take.</p>
+
+        <h3>Site Maker</h3>
+        <p>Combine all analysis outputs, <code>solutions/prompt-sequence.md</code>, and <code>./INPUT-manifest.md</code> into a static website housed in <code>./frontend-2/</code>.</p>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Sidebar -->
+  <aside class="sidebar" id="data">
+
+    <!-- Model comparison summary -->
+    <div class="sidebar-card">
+      <h3>Model Scoreboard</h3>
+      <div class="model-table-wrap" style="border:none;padding:0;">
+      <table class="model-table">
+        <thead>
+          <tr><th>Starter</th><th>Model</th><th>Render</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>21</td><td>GPT 5.3 Codex</td><td class="status-ok">✓</td></tr>
+          <tr><td>22</td><td>GPT 5.4</td><td class="status-ok">✓</td></tr>
+          <tr><td>23</td><td>Gemini 3.1 Pro</td><td class="status-ok">✓</td></tr>
+          <tr><td>24</td><td>Grok Code Fast 1</td><td class="status-ok">✓</td></tr>
+          <tr><td>25</td><td>GPT-4o</td><td class="status-fail">✗</td></tr>
+          <tr><td>26</td><td>GPT-4.1</td><td class="status-fail">✗</td></tr>
+          <tr><td>27</td><td>Haiku 4.5</td><td class="status-ok">✓</td></tr>
+          <tr><td>28</td><td>Opus 4.6</td><td class="status-ok">✓</td></tr>
+        </tbody>
+      </table>
+      </div>
+    </div>
+
+    <!-- Dataset metadata -->
+    <div class="sidebar-card">
+      <h3>Dataset</h3>
+      <table class="meta-table">
+        <tr><td>Name</td><td>Income Support Caseload</td></tr>
+        <tr><td>Publisher</td><td>Alberta Assisted Living and Social Services (ALSS)</td></tr>
+        <tr><td>Coverage</td><td>April 2005 – September 2025</td></tr>
+        <tr><td>Months</td><td>246 calendar months</td></tr>
+        <tr><td>Data rows</td><td>3,722 (excl. header rows)</td></tr>
+        <tr><td>Frequency</td><td>Monthly</td></tr>
+        <tr><td>Geography</td><td>Province of Alberta</td></tr>
+        <tr><td>License</td><td><a href="https://open.alberta.ca/licence" target="_blank" rel="noopener">Open Government Licence – Alberta</a></td></tr>
+        <tr><td>Open Data</td><td><a href="https://open.alberta.ca/opendata/income-support-aggregated-caseload-data" target="_blank" rel="noopener">Alberta Open Data Portal</a></td></tr>
+      </table>
+    </div>
+
+    <!-- Client type definitions -->
+    <div class="sidebar-card">
+      <h3>Client Types</h3>
+      <ul class="def-list">
+        <li>
+          <div class="def-term">Expected to Work (ETW)</div>
+          <div class="def-body">Clients assessed as able to participate in employment activities. Subdivided by working status, availability, or temporary unavailability. Generally expected to pursue employment and may receive income supplementation for low earnings.</div>
+        </li>
+        <li>
+          <div class="def-term">Barriers to Full Employment (BFE)</div>
+          <div class="def-body">Clients facing significant, often long-term, barriers that preclude full-time employment — including chronic health conditions (&gt;6 months), caregiving responsibilities, or other life circumstances. Generally receive higher benefit levels.</div>
+        </li>
+      </ul>
+    </div>
+
+    <!-- Raw file format -->
+    <div class="sidebar-card">
+      <h3>Raw File Format</h3>
+      <div class="raw-format">
+        <p>The CSV uses a <strong>two-row header</strong> pattern:</p>
+        <ul>
+          <li><strong>Row 1</strong> (title): merged label — <em>Alberta Assisted Living and Social Services · Income Support Caseload</em></li>
+          <li><strong>Row 2</strong> (columns): <code>Ref_Date</code>, <code>Geography</code>, <code>Measure Type</code>, <code>Measure</code>, <code>Value</code> + 9 trailing empty columns</li>
+          <li><strong>Rows 3+</strong> (data): One observation per row — a single (month × measure type × measure) combination</li>
+        </ul>
+      </div>
+    </div>
+
+  </aside>
+
+</main>
+
+<!-- ── Footer ───────────────────────────────────────────────────── -->
+<footer>
+  <p>
+    Data: <a href="https://open.alberta.ca/opendata/income-support-aggregated-caseload-data" target="_blank" rel="noopener">Alberta Income Support Aggregated Caseload</a>
+    ·
+    <a href="https://open.alberta.ca/licence" target="_blank" rel="noopener">Open Government Licence – Alberta</a>
+    · Analyses produced by GitHub Copilot across multiple AI models
+  </p>
+</footer>
+
+</body>
+</html>
